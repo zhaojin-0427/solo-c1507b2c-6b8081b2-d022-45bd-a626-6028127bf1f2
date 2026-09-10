@@ -225,5 +225,261 @@ class FeasibleGenerationRegressionTest(unittest.TestCase):
                 self.assertTrue(2 <= len(grp) <= 4)
 
 
+class RotationGenerationTest(unittest.TestCase):
+    """多轮轮换：完整方案生成（覆盖率/重复上限/关系作用域）。"""
+
+    def setUp(self):
+        self.client = app.test_client()
+        self.students = [
+            {"id": "s%d" % i, "name": "学员%d" % i, "tags": t}
+            for i, t in enumerate([
+                ["前端"], ["后端"], ["设计"], ["前端"], ["后端"], ["运维"],
+                ["测试"], ["设计"], ["前端"], ["后端"], ["演讲"], ["测试"],
+            ])]
+        self.relations = [
+            {"type": "must", "a": "s0", "b": "s3", "scope": {"rounds": [0, 1]}},
+            {"type": "cannot", "a": "s1", "b": "s4", "scope": "all"},
+        ]
+        self.rotation = {
+            "rounds": [
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+                {"numGroups": 4, "minSize": 2, "maxSize": 4},
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+            ],
+            "balanceTags": ["前端", "后端"], "cap": 2,
+            "maxCoverage": True, "numPlans": 3,
+        }
+
+    def generate(self, rotation=None, relations=None):
+        res = self.client.post("/api/rotation/generate", json={
+            "students": self.students,
+            "relations": relations if relations is not None else self.relations,
+            "rotation": rotation or self.rotation,
+        })
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def test_generates_feasible_rotation_plans(self):
+        data = self.generate()
+        self.assertEqual(data["conflicts"], [])
+        self.assertGreaterEqual(len(data["plans"]), 2)
+        for plan in data["plans"]:
+            self.assertTrue(plan["hardOk"])
+            self.assertEqual(len(plan["rounds"]), 3)
+            for ri, groups in enumerate(plan["rounds"]):
+                rc = self.rotation["rounds"][ri]
+                self.assertEqual(len(groups), rc["numGroups"])
+                for grp in groups:
+                    self.assertTrue(rc["minSize"] <= len(grp) <= rc["maxSize"])
+                gid = {s: g for g, gr in enumerate(groups) for s in gr}
+                # “不可同组”全程生效
+                self.assertNotEqual(gid["s1"], gid["s4"])
+                # “必须同组”只在第 1、2 轮生效
+                if ri in (0, 1):
+                    self.assertEqual(gid["s0"], gid["s3"])
+            # 全员每轮恰好出现一次
+            for groups in plan["rounds"]:
+                flat = sorted(s for g in groups for s in g)
+                self.assertEqual(flat, sorted(s["id"] for s in self.students))
+            # 跨轮上限
+            self.assertLessEqual(plan["maxRepeat"], 2)
+            self.assertEqual(plan["capHits"], [])
+            self.assertTrue(0 < plan["coverage"] <= 1)
+            # 指标含每轮标签偏差
+            self.assertEqual(len(plan["tagDeviation"]), 3)
+
+    def test_capacity_conflict_static_not_500(self):
+        """两轮 5/5 大组 + cap=1 必须静态判冲突，而不是搜索后失败或 500。"""
+        rotation = {
+            "rounds": [
+                {"numGroups": 2, "minSize": 4, "maxSize": 6},
+                {"numGroups": 2, "minSize": 4, "maxSize": 6},
+            ],
+            "balanceTags": [], "cap": 1, "numPlans": 2,
+        }
+        data = self.generate(rotation, [])
+        self.assertEqual(data["plans"], [])
+        self.assertTrue(data["conflicts"])
+        self.assertIn("rotation_cap_capacity",
+                      [c["kind"] for c in data["conflicts"]])
+
+    def test_forced_must_conflict_cross_flag(self):
+        """全程必须同组（2 轮）与 cap=1 冲突，标记为跨轮冲突。"""
+        rotation = {
+            "rounds": [
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+            ],
+            "balanceTags": [], "cap": 1, "numPlans": 2,
+        }
+        rels = [{"type": "must", "a": "s0", "b": "s3", "scope": "all"}]
+        data = self.generate(rotation, rels)
+        self.assertEqual(data["plans"], [])
+        kind = next((c for c in data["conflicts"]
+                     if c["kind"] == "rotation_cap_forced"), None)
+        self.assertIsNotNone(kind)
+        self.assertTrue(kind["cross"])
+
+    def test_round_specific_conflict_has_round(self):
+        """某一轮不可同组奇环无解时，冲突带具体轮次。"""
+        # 取 5 人在第 2 轮（idx1）构成 C5 奇环，2 组 2~3 人
+        five = self.students[:5]
+        rels = [{"type": "cannot", "a": "s%d" % i,
+                 "b": "s%d" % ((i + 1) % 5), "scope": {"rounds": [1]}}
+                for i in range(5)]
+        rotation = {
+            "rounds": [
+                {"numGroups": 2, "minSize": 2, "maxSize": 3},
+                {"numGroups": 2, "minSize": 2, "maxSize": 3},
+            ],
+            "balanceTags": [], "cap": 2, "numPlans": 2,
+        }
+        # 总人数 5 人
+        res = self.client.post("/api/rotation/generate", json={
+            "students": five, "relations": rels, "rotation": rotation})
+        data = res.get_json()
+        self.assertEqual(data["plans"], [])
+        odd = [c for c in data["conflicts"]
+               if c["kind"] in ("cannot_odd_cycle", "cannot_uncolorable")]
+        self.assertTrue(odd, [c["kind"] for c in data["conflicts"]])
+        self.assertEqual(odd[0]["round"], 1)
+
+
+class RotationResolveTest(unittest.TestCase):
+    """多轮轮换：锁定后只重排后续轮次 + 影响/搭档变化。"""
+
+    def setUp(self):
+        self.client = app.test_client()
+        self.students = [
+            {"id": "s%d" % i, "name": "学员%d" % i, "tags": t}
+            for i, t in enumerate([
+                ["前端"], ["后端"], ["设计"], ["前端"], ["后端"], ["运维"],
+                ["测试"], ["设计"], ["前端"], ["后端"], ["演讲"], ["测试"],
+            ])]
+        self.relations = [{"type": "cannot", "a": "s1", "b": "s4", "scope": "all"}]
+        self.rotation = {
+            "rounds": [
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+                {"numGroups": 4, "minSize": 2, "maxSize": 4},
+                {"numGroups": 3, "minSize": 3, "maxSize": 5},
+            ],
+            "balanceTags": ["前端"], "cap": 2, "numPlans": 3,
+        }
+        gen = self.client.post("/api/rotation/generate", json={
+            "students": self.students, "relations": self.relations,
+            "rotation": self.rotation}).get_json()
+        self.assertEqual(gen["conflicts"], [])
+        self.current = gen["plans"][0]["rounds"]
+
+    def resolve(self, from_round, locks):
+        return self.client.post("/api/rotation/resolve", json={
+            "students": self.students, "relations": self.relations,
+            "rotation": self.rotation, "currentRounds": self.current,
+            "fromRound": from_round, "locks": locks}).get_json()
+
+    def test_frozen_rounds_unchanged_and_locks_held(self):
+        locked_sid = self.current[1][0][0]
+        data = self.resolve(1, {1: {"members": [locked_sid], "groups": []}})
+        self.assertEqual(data["conflicts"], [])
+        payload = data["payload"]
+        self.assertIsNotNone(payload)
+        # 第 1 轮冻结不变
+        self.assertEqual([sorted(x) for x in payload["rounds"][0]],
+                         [sorted(x) for x in self.current[0]])
+        # 锁定成员在第 2 轮位置不变
+        def gid_of(rounds, ri, sid):
+            return next(g for g, grp in enumerate(rounds[ri]) if sid in grp)
+        self.assertEqual(gid_of(payload["rounds"], 1, locked_sid),
+                         gid_of(self.current, 1, locked_sid))
+        # 所有轮仍可行
+        for ri, groups in enumerate(payload["rounds"]):
+            rc = self.rotation["rounds"][ri]
+            for grp in groups:
+                self.assertTrue(rc["minSize"] <= len(grp) <= rc["maxSize"])
+            gm = {member: gi for gi, grp in enumerate(groups) for member in grp}
+            self.assertNotEqual(gm["s1"], gm["s4"])
+        self.assertLessEqual(payload["metrics"]["maxRepeat"], 2)
+        # 影响与搭档变化字段齐全
+        self.assertIn("affectedCount", payload)
+        self.assertEqual(len(payload["affected"]), payload["affectedCount"])
+        self.assertIn("more", payload["repeatChanges"])
+        self.assertIn("less", payload["repeatChanges"])
+
+    def test_resolve_no_500_on_missing_rounds(self):
+        """currentRounds 缺轮/为空时后端补全，不得 500。"""
+        res = self.client.post("/api/rotation/resolve", json={
+            "students": self.students, "relations": self.relations,
+            "rotation": self.rotation, "currentRounds": [],
+            "fromRound": 0, "locks": {}})
+        self.assertEqual(res.status_code, 200)
+
+
+class RotationSaveAndPrintTest(unittest.TestCase):
+    """多轮结果随存档保存 + 按轮分页打印。"""
+
+    def setUp(self):
+        self.client = app.test_client()
+        self.students = [
+            {"id": "s%d" % i, "name": "学员%d" % i, "tags": t}
+            for i, t in enumerate([["前端"], ["后端"], ["设计"], ["前端"],
+                                   ["后端"], ["运维"], ["测试"], ["设计"]])]
+        self.rotation = {
+            "rounds": [
+                {"numGroups": 2, "minSize": 3, "maxSize": 5},
+                {"numGroups": 4, "minSize": 2, "maxSize": 3},
+                {"numGroups": 2, "minSize": 3, "maxSize": 5},
+            ],
+            "balanceTags": ["前端"], "cap": 2, "numPlans": 2,
+        }
+        gen = self.client.post("/api/rotation/generate", json={
+            "students": self.students, "relations": [],
+            "rotation": self.rotation}).get_json()
+        self.assertEqual(gen["conflicts"], [])
+        self.plans = gen["plans"]
+
+    def test_save_roundtrip_rotation(self):
+        body = {
+            "name": "轮换存档测试", "mode": "rotation",
+            "students": self.students, "relations": [
+                {"type": "must", "a": "s0", "b": "s3",
+                 "scope": {"rounds": [0, 2]}}],
+            "rotation": self.rotation, "plans": self.plans,
+            "roundsWorking": self.plans[0]["rounds"],
+            "roundLocks": {0: {"members": ["s0"], "groups": []}},
+        }
+        res = self.client.post("/api/saves", json=body)
+        sid = res.get_json()["id"]
+        got = self.client.get("/api/saves/" + sid).get_json()
+        self.assertEqual(got["mode"], "rotation")
+        self.assertEqual(len(got["rotation"]["rounds"]), 3)
+        self.assertEqual(len(got["plans"]), len(self.plans))
+        self.assertEqual(len(got["roundsWorking"]), 3)
+        rel = got["relations"][0]
+        self.assertEqual(rel["scope"], {"rounds": [0, 2]})
+        self.client.delete("/api/saves/" + sid)
+
+    def test_rotation_print_paginated(self):
+        res = self.client.post("/api/prints", json={
+            "mode": "rotation", "title": "多轮打印",
+            "students": self.students,
+            "rounds": self.plans[0]["rounds"],
+            "roundNames": ["第 1 轮分组", "第 2 轮分组", "第 3 轮分组"],
+        })
+        pid = res.get_json()["id"]
+        # 数据页含 3 个分页
+        import json as _json, os
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "data", "prints", pid + ".json")
+        with open(path, encoding="utf-8") as f:
+            entry = _json.load(f)
+        self.assertEqual(entry["mode"], "rotation")
+        self.assertEqual(len(entry["pages"]), 3)
+        # 打印视图渲染成功且每轮一节
+        html = self.client.get("/print/" + pid + "?anon=1").get_data(as_text=True)
+        self.assertEqual(html.count('class="page"'), 3)
+        self.assertIn("第 2 轮分组", html)
+        self.assertIn("成员01", html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

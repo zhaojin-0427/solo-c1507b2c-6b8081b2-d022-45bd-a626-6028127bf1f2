@@ -223,7 +223,39 @@ def detect_rotation_conflicts(students, relations, rotation,
             c["cross"] = False
             conflicts.append(c)
 
-    # 4) 跨轮静态冲突：每轮都被“必须同组”绑定的两人，被迫重复次数 > cap
+    # 4) 跨轮静态冲突：容量鸽笼——任意两轮 (i,j) 与上限 cap 必须相容。
+    #    第 j 轮一个组至少 minSize_j 人，把他们放进第 i 轮的 g_i 个组：
+    #    必有至少 ceil(minSize_j / g_i) 人落在第 i 轮同一组；若该数 > cap，
+    #    这两人在两轮都同组，超限。对 (i,j) 双向检查。
+    for i in range(R):
+        gi = rounds[i]["numGroups"]
+        for j in range(i + 1, R):
+            gj = rounds[j]["numGroups"]
+            same_i = -(-rounds[j]["minSize"] // gi)  # ceil(min_j / g_i)
+            same_j = -(-rounds[i]["minSize"] // gj)
+            if same_i > cap:
+                conflicts.append({
+                    "kind": "rotation_cap_capacity", "round": i, "cross": True,
+                    "people": [], "chain": [],
+                    "message": "跨轮上限 %d 与第 %d、%d 轮不相容：第 %d 轮每组至少 %d 人，"
+                               "他们分到第 %d 轮的 %d 个组时，必有至少 %d 人同组（>上限）。"
+                               "请提高上限、增加第 %d 轮组数，或减小第 %d 轮人数下限。"
+                               % (cap, i + 1, j + 1, j + 1, rounds[j]["minSize"],
+                                  i + 1, gi, same_i, i + 1, j + 1),
+                })
+            if same_j > cap:
+                conflicts.append({
+                    "kind": "rotation_cap_capacity", "round": j, "cross": True,
+                    "people": [], "chain": [],
+                    "message": "跨轮上限 %d 与第 %d、%d 轮不相容：第 %d 轮每组至少 %d 人，"
+                               "他们分到第 %d 轮的 %d 个组时，必有至少 %d 人同组（>上限）。"
+                               "请提高上限、增加第 %d 轮组数，或减小第 %d 轮人数下限。"
+                               % (cap, i + 1, j + 1, i + 1, rounds[i]["minSize"],
+                                  j + 1, gj, same_j, j + 1, i + 1),
+                })
+
+    # 5) 跨轮静态冲突：每轮都被“必须同组”绑定的两人，被迫重复次数 > cap
+    block_per_round = []
     for ri in range(R):
         rs = relations_for_round(relations, ri)
         block_per_round.append([set(b) for b in solver.build_blocks(students, rs)])

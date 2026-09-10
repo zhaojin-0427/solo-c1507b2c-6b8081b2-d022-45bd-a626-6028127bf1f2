@@ -675,10 +675,11 @@ function softReport() {
 /* ---------- 渲染排演台 ---------- */
 function renderWorkbenchVisibility() {
   const rot = state.mode === "rotation" && state.roundsWorking;
-  const single = state.mode === "single" && state.working;
-  $("#wb-empty").classList.toggle("hidden", !single || rot);
-  $("#wb-main").classList.toggle("hidden", !single || rot);
-  $("#rot-empty").classList.toggle("hidden", !rot);
+  const single = state.mode === "single" && !!state.working;
+  // 单轮：无方案时显示空提示；有方案显示排演台。轮换模式下单轮区整体隐藏。
+  $("#wb-empty").classList.toggle("hidden", single || state.mode === "rotation");
+  $("#wb-main").classList.toggle("hidden", !single);
+  $("#rot-empty").classList.toggle("hidden", rot || state.mode === "single");
   $("#rot-main").classList.toggle("hidden", !rot);
 }
 
@@ -712,7 +713,13 @@ function renderWorkbench() {
   const violations = validateWorking();
   const badGroups = new Set(), badPeople = new Set();
   violations.forEach(v => {
-    if (v.group >= 0) badGroups.add(v.group);
+    if (v.group >= 0) {
+      badGroups.add(v.group);
+      // 人数越界时，该组全部成员芯片标红（与关系违规一致）
+      if (v.type === "size" && state.working[v.group]) {
+        state.working[v.group].forEach(p => badPeople.add(p));
+      }
+    }
     v.people.forEach(p => badPeople.add(p));
   });
   const vs = $("#violation-summary");
@@ -1168,8 +1175,9 @@ $("#btn-rot-generate").addEventListener("click", async () => {
 /* ---------- 多轮换台渲染 ---------- */
 function renderRotWorkbench() {
   const has = !!state.roundsWorking;
-  $("#rot-empty").classList.toggle("hidden", has);
-  $("#rot-main").classList.toggle("hidden", !has);
+  // 显隐统一交给 renderWorkbenchVisibility（按模式 + 是否有方案），这里只做早退，
+  // 避免在单轮模式/空状态下把已隐藏的面板重新显示或访问不存在的元素。
+  renderWorkbenchVisibility();
   if (!has) return;
   $("#rot-conflict-card").classList.add("hidden");
 
@@ -1222,7 +1230,10 @@ function renderRotRoundCards() {
   const violations = validateGroups(groups, rc.minSize, rc.maxSize, rels);
   const badGroups = new Set(), badPeople = new Set();
   violations.forEach(v => {
-    if (v.group >= 0) badGroups.add(v.group);
+    if (v.group >= 0) {
+      badGroups.add(v.group);
+      if (v.type === "size" && groups[v.group]) groups[v.group].forEach(p => badPeople.add(p));
+    }
     v.people.forEach(p => badPeople.add(p));
   });
 
@@ -1321,6 +1332,35 @@ function renderRotMemberChip(sid, ri, violating) {
   return chip;
 }
 
+/* 把当前方案（state.plans[planCur]）同步为实时编排结果：
+   拖动调整后，页签徽章与该方案的 rounds/指标都按当前分组重算。 */
+function syncCurrentPlanLive() {
+  if (state.planCur < 0 || !state.plans[state.planCur] || !state.roundsWorking) return;
+  const p = state.plans[state.planCur];
+  p.rounds = cloneRounds(state.roundsWorking);
+  const stats = rotationStats();
+  p.coverage = stats.coverage;
+  p.coveredPairs = stats.covered;
+  p.totalPairs = stats.total;
+  p.maxRepeat = stats.maxRepeat;
+  p.capHits = stats.capHits;
+  const tagsOf = {};
+  state.students.forEach(s => { tagsOf[s.id] = new Set(s.tags); });
+  p.tagDeviation = state.roundsWorking.map((groups, ri) => {
+    const tags = {};
+    for (const tag of state.rotation.balanceTags) {
+      const counts = groups.map(grp => grp.filter(sid => (tagsOf[sid] || new Set()).has(tag)).length);
+      const mean = counts.reduce((a, b) => a + b, 0) / groups.length;
+      tags[tag] = {
+        counts,
+        mean: Math.round(mean * 100) / 100,
+        deviation: Math.round(counts.reduce((s, c) => s + Math.abs(c - mean), 0) / 2 * 10) / 10,
+      };
+    }
+    return { round: ri, tags };
+  });
+}
+
 function moveRotMember(sid, ri, targetGi) {
   const lk = roundLocksOf(ri);
   if (lk.members.has(sid)) { toast("该成员本轮已锁定", true); return; }
@@ -1331,12 +1371,33 @@ function moveRotMember(sid, ri, targetGi) {
   pushHistoryRot();
   groups[fromGi] = groups[fromGi].filter(x => x !== sid);
   groups[targetGi].push(sid);
+  syncCurrentPlanLive();
   renderRotWorkbench();
   const rc = state.rotation.rounds[ri];
   const rels = state.relations.filter(r => relIsActive(r, ri));
   const fresh = validateGroups(groups, rc.minSize, rc.maxSize, rels)
     .filter(v => v.group === targetGi || v.group === fromGi || v.people.includes(sid));
   if (fresh.length) toast("⚠ " + fresh[0].message, true);
+}
+
+/* 实时计算某轮各标签在当前分组下的分布与偏差（不读取原始方案数据） */
+function liveTagDeviation(ri) {
+  const groups = state.roundsWorking[ri];
+  const g = groups.length;
+  const tagsOf = {};
+  state.students.forEach(s => { tagsOf[s.id] = new Set(s.tags); });
+  const out = [];
+  for (const tag of state.rotation.balanceTags) {
+    const counts = groups.map(grp => grp.filter(sid => (tagsOf[sid] || new Set()).has(tag)).length);
+    const total = counts.reduce((a, b) => a + b, 0);
+    const mean = total / g;
+    const deviation = Math.round(counts.reduce((s, c) => s + Math.abs(c - mean), 0) / 2 * 10) / 10;
+    // 是否偏离均衡（均值取整区间之外）
+    const lo = Math.floor(mean), hi = Math.ceil(mean);
+    const imbalanced = counts.some(c => c < lo || c > hi);
+    out.push({ tag, counts, mean, deviation, imbalanced });
+  }
+  return out;
 }
 
 /* ---------- 状态摘要 + 同伴矩阵 ---------- */
@@ -1349,10 +1410,20 @@ function renderRotStatusAndMatrix() {
   $("#rot-lock-summary").textContent = "第 " + (ri + 1) + " 轮 · " +
     (parts.length ? "🔒 " + parts.join("，") : "本轮未锁定");
 
+  // 硬约束状态：按当前分组实时校验（人数范围 + 本轮生效关系）
+  const rc = state.rotation.rounds[ri];
+  const rels = state.relations.filter(r => relIsActive(r, ri));
+  const hardViolations = validateGroups(state.roundsWorking[ri], rc.minSize, rc.maxSize, rels);
+
   const stats = rotationStats();
   const vs = $("#rot-violation-summary");
-  vs.textContent = "✓ 本轮硬约束满足";
-  vs.className = "ok";
+  if (hardViolations.length) {
+    vs.textContent = "⚠ 本轮 " + hardViolations.length + " 处硬约束违规";
+    vs.className = "bad";
+  } else {
+    vs.textContent = "✓ 本轮硬约束满足";
+    vs.className = "ok";
+  }
   const cs = $("#rot-cross-summary");
   const capOk = stats.capHits.length === 0;
   cs.textContent = capOk
@@ -1361,26 +1432,22 @@ function renderRotStatusAndMatrix() {
     : "⚠ " + stats.capHits.length + " 对学员同组超过上限 " + state.rotation.cap + " 次";
   cs.className = capOk ? "ok" : "bad";
 
-  // 指标列表
+  // 指标列表：标签分布/偏差实时按当前分组重算
   const ml = $("#rot-metrics-list");
-  const tagRows = [];
-  const p = state.plans[state.planCur];
-  if (p && p.tagDeviation && p.tagDeviation[ri]) {
-    for (const tag of state.rotation.balanceTags) {
-      const td = p.tagDeviation[ri].tags[tag];
-      if (td) tagRows.push([tag, td]);
-    }
-  }
+  const tagRows = liveTagDeviation(ri);
   let html =
     '<li class="' + (capOk ? "ok" : "bad") + '">同伴覆盖率：' + (stats.coverage * 100).toFixed(1) +
     "%（" + stats.covered + "/" + stats.total + " 对曾同组）</li>" +
     '<li class="' + (stats.maxRepeat <= state.rotation.cap ? "ok" : "bad") + '">最高同组重复：' +
     stats.maxRepeat + " 次（上限 " + state.rotation.cap + "）</li>" +
+    '<li class="' + (hardViolations.length ? "bad" : "ok") + '">本轮硬约束：' +
+    (hardViolations.length ? hardViolations.length + " 处违规" : "全部满足") + "</li>" +
     '<li class="hint">未曾同组组合：' + (stats.total - stats.covered) + " 对</li>";
   if (tagRows.length) {
-    html += tagRows.map(([tag, td]) =>
-      '<li class="warn">第 ' + (ri + 1) + ' 轮标签「' + esc(tag) + "」分布 " +
-      td.counts.join("/") + "，偏差 " + td.deviation + "</li>").join("");
+    html += tagRows.map(td =>
+      '<li class="' + (td.imbalanced ? "warn" : "ok") + '">第 ' + (ri + 1) + ' 轮标签「' +
+      esc(td.tag) + "」分布 " + td.counts.join("/") + "（均衡 " + td.mean.toFixed(1) +
+      "，偏差 " + td.deviation + "）</li>").join("");
   }
   ml.innerHTML = html;
 
@@ -1443,6 +1510,7 @@ $("#btn-rot-undo").addEventListener("click", () => {
   state.roundsWorking = prev.rounds;
   state.roundLocks = prev.locks;
   state.activeRound = prev.activeRound;
+  syncCurrentPlanLive();
   renderRotWorkbench();
   toast("已撤销");
 });
@@ -1478,8 +1546,19 @@ $("#btn-rot-resolve").addEventListener("click", async () => {
   const fromRound = state.activeRound;
   const lk = roundLocksOf(fromRound);
   const btn = $("#btn-rot-resolve");
-  btn.disabled = true;
-  btn.textContent = "计算重排影响中…";
+  const label = $("#rot-resolve-label");
+  const setBtnBusy = (busy) => {
+    btn.disabled = busy;
+    // 保留内部 <span id="rot-resolve-label">，不要用 textContent 覆盖整个按钮
+    if (busy) {
+      btn.dataset.busy = "1";
+      if (label) label.textContent = "…计算中";
+    } else if (label) {
+      delete btn.dataset.busy;
+      label.textContent = (state.activeRound + 1) + " 轮";
+    }
+  };
+  setBtnBusy(true);
   try {
     const locks = {};
     locks[fromRound] = { members: [...lk.members], groups: [...lk.groups] };
@@ -1509,8 +1588,7 @@ $("#btn-rot-resolve").addEventListener("click", async () => {
   } catch (err) {
     toast(err.message, true);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "⚙ 锁定此前各轮，从第 " + (state.activeRound + 1) + " 轮起重排后续";
+    setBtnBusy(false);
   }
 });
 
@@ -1558,6 +1636,7 @@ $("#resolve-apply").addEventListener("click", () => {
   state.activeRound = pendingResolve.fromRound;
   $("#resolve-modal").classList.add("hidden");
   pendingResolve = null;
+  syncCurrentPlanLive();
   renderRotWorkbench();
   toast("已重排第 " + (state.activeRound + 1) + " 轮及之后各轮");
 });

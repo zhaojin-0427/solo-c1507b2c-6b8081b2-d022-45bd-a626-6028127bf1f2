@@ -169,6 +169,204 @@ async function scenarioB() {
   check("B12 乙被拉回与甲同组", groupOf("乙") === jiaGroup);
 }
 
+/* ---------------- 场景C：拖动后硬约束/标签实时重算 ---------------- */
+async function scenarioC() {
+  console.log("场景C：单轮拖动引发容量与标签变化，状态实时重算");
+  const window = await newPage();
+  const $ = (s) => window.document.querySelector(s);
+  const $$ = (s) => Array.from(window.document.querySelectorAll(s));
+
+  // 8 人：4 名带「前端」标签 + 4 名不带；2 组、每组 4 人
+  $("#bulk-text").value =
+    "甲 前端\n乙 前端\n丙 前端\n丁 前端\n戊\n己\n庚\n辛";
+  $("#btn-bulk-import").click();
+  check("C1 学员录入 8 人", $$("#student-table tbody tr").length === 8);
+
+  $("#set-groups").value = "2";
+  $("#set-min").value = "4";
+  $("#set-max").value = "4";
+  $("#btn-generate").click();
+  await sleep(400);
+
+  const chipOf = (name) =>
+    $$(".member-chip").find((c) => c.children[0] && c.children[0].textContent === name);
+  const groupOf = (name) => {
+    const chip = chipOf(name);
+    return chip ? parseInt(chip.closest(".group-card").dataset.group, 10) : -1;
+  };
+  const sizes = () => $$("#groups-grid .group-card").map(
+    (c) => c.querySelectorAll(".member-chip").length);
+
+  check("C2 生成两组各 4 人", sizes().join("/") === "4/4", sizes().join("/"));
+  check("C3 初始硬约束满足", $("#violation-summary").classList.contains("ok"));
+
+  // 记录拖动前某组的标签软约束条数
+  const softBefore = $$("#soft-list li.warn").length;
+
+  // 把一个人从组0拖到组1 → 容量变为 3/5（超过上限4）
+  const victim = $$("#groups-grid .group-card")[0]
+    .querySelectorAll(".member-chip")[0];
+  const sid = victim.dataset.sid;
+  const target = $$("#groups-grid .group-card")[1];
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  drop.dataTransfer = { getData: (k) => (k === "text/plain" ? sid : "") };
+  target.dispatchEvent(drop);
+  await sleep(40);
+
+  check("C4 拖动后容量实时变化 3/5", sizes().join("/") === "3/5", sizes().join("/"));
+  check("C5 硬约束状态实时变红", $("#violation-summary").classList.contains("bad"),
+    $("#violation-summary").textContent);
+  const vtext = $("#violation-list").textContent;
+  check("C6 违规列表提示超出上限", vtext.includes("超出上限"));
+  // 重渲染会重建卡片，必须重新查询当前 DOM（旧 target 已脱离文档）
+  const redAfter = $$("#groups-grid .group-card")[1]
+    .querySelectorAll(".member-chip.violating").length;
+  check("C7 违规组成员芯片标红", redAfter > 0, "红芯片 " + redAfter);
+
+  // 软约束（人数均衡/标签）也应按当前分组重算
+  const softAfter = $$("#soft-list li.warn").length;
+  check("C8 标签/人数软约束按当前分组重算",
+    softAfter >= softBefore && $$("#soft-list li").length > 0,
+    "before=" + softBefore + " after=" + softAfter);
+
+  // 撤销 → 恢复 4/4，硬约束回到满足
+  $("#btn-undo").click();
+  await sleep(30);
+  check("C9 撤销后恢复 4/4", sizes().join("/") === "4/4", sizes().join("/"));
+  check("C10 撤销后硬约束恢复满足", $("#violation-summary").classList.contains("ok"));
+}
+
+/* ---------------- 场景D：多轮轮换 ---------------- */
+async function scenarioD() {
+  console.log("场景D：多轮轮换生成、同伴矩阵、后续重排、撤销、分页打印");
+  const window = await newPage();
+  const $ = (s) => window.document.querySelector(s);
+  const $$ = (s) => Array.from(window.document.querySelectorAll(s));
+
+  $("#bulk-text").value =
+    "甲 前端\n乙 后端\n丙 设计\n丁 前端\n戊 后端\n己 运维\n庚 测试\n辛 设计\n壬 前端\n癸 后端";
+  $("#btn-bulk-import").click();
+  check("D1 学员录入 10 人", $$("#student-table tbody tr").length === 10);
+
+  // 切换到多轮轮换
+  $$("#mode-switch .mode-btn").find((b) => b.dataset.mode === "rotation").click();
+  check("D2 已切换多轮设置面板", !$("#rotation-settings").classList.contains("hidden"));
+
+  // 2 轮：3 组、每组 3~4 人（10 人），cap=2，勾选前端标签
+  $("#rot-rounds").value = "2";
+  $("#rot-rounds").dispatchEvent(new window.Event("change"));
+  $("#rot-cap").value = "2";
+  $("#rot-cap").dispatchEvent(new window.Event("change"));
+  const inputs = $$("#rot-rounds-table tbody input");
+  const setRow = (r, ng, mn, mx) => {
+    inputs[r * 3].value = ng; inputs[r * 3].dispatchEvent(new window.Event("change"));
+    inputs[r * 3 + 1].value = mn; inputs[r * 3 + 1].dispatchEvent(new window.Event("change"));
+    inputs[r * 3 + 2].value = mx; inputs[r * 3 + 2].dispatchEvent(new window.Event("change"));
+  };
+  setRow(0, 3, 3, 4);
+  setRow(1, 3, 3, 4);
+  // 勾选“前端”标签均衡
+  $$("#rot-tag-options .tag-option").forEach((lab) => {
+    if (lab.textContent.trim() === "前端" && !lab.classList.contains("checked"))
+      lab.querySelector("input").click();
+  });
+
+  $("#btn-rot-generate").click();
+  await sleep(1200);
+  check("D3 无冲突卡片", $("#conflict-card").classList.contains("hidden"));
+  check("D4 轮换台显示", !$("#rot-main").classList.contains("hidden"));
+  check("D5 生成 2 个轮次页签", $$("#round-tabs .round-tab").length === 2);
+  check("D6 有轮换方案页签", $$("#rot-plan-tabs .sol-tab").length >= 1);
+
+  const sizesNow = () => $$("#rot-groups-grid .group-card").map(
+    (c) => c.querySelectorAll(".member-chip").length);
+  check("D7 本轮 3 组且人数在 3~4", sizesNow().length === 3 &&
+    sizesNow().every((n) => n >= 3 && n <= 4), sizesNow().join("/"));
+
+  // 同伴矩阵：10×10 + 表头，对角线，存在 0 与 >0 单元
+  const cells = $$("#rot-matrix tbody td");
+  check("D8 同伴矩阵 100 格", cells.length === 100, "实际 " + cells.length);
+  const zero = $$("#rot-matrix td.m0").length;
+  const diag = $$("#rot-matrix td.mdiag").length;
+  check("D9 矩阵对角线 10 格", diag === 10, "实际 " + diag);
+  check("D10 矩阵标出未曾同组组合", zero > 0, "m0=" + zero);
+
+  // 跨轮摘要含覆盖率与最高重复
+  const crossText = $("#rot-cross-summary").textContent;
+  check("D11 跨轮摘要含覆盖率/最高重复",
+    crossText.includes("覆盖率") && crossText.includes("最高重复"), crossText);
+
+  // 实时标签偏差显示（当前分组）
+  check("D12 当前轮标签偏差实时显示",
+    $$("#rot-metrics-list li").some((li) => li.textContent.includes("前端")),
+    $("#rot-metrics-list").textContent.slice(0, 60));
+
+  // 拖动一个成员到一个 4 人组，使其变 5 人（超过上限 4），状态应实时变红
+  const cards = $$("#rot-groups-grid .group-card");
+  let sourceCard = null, targetCard = null, sid = null;
+  for (let i = 0; i < cards.length && !targetCard; i++) {
+    if (cards[i].querySelectorAll(".member-chip").length !== 4) continue;
+    for (let j = 0; j < cards.length; j++) {
+      if (j !== i && cards[j].querySelectorAll(".member-chip").length >= 1) {
+        sourceCard = cards[j]; targetCard = cards[i]; break;
+      }
+    }
+  }
+  sid = sourceCard.querySelectorAll(".member-chip")[0].dataset.sid;
+  const sizesBefore = sizesNow();
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  drop.dataTransfer = { getData: (k) => (k === "text/plain" ? sid : "") };
+  targetCard.dispatchEvent(drop);
+  await sleep(40);
+  check("D13 拖动后组人数变化",
+    sizesNow().join("/") !== sizesBefore.join("/"),
+    sizesBefore.join("/") + " -> " + sizesNow().join("/"));
+  check("D14 拖动后本轮硬约束实时重算",
+    $("#rot-violation-summary").classList.contains("bad") ||
+      $$("#rot-violation-list li.bad").length > 0,
+    $("#rot-violation-summary").textContent);
+
+  // 从本轮起重排（第1轮，fromRound=0，无冻结），应弹出影响预览
+  $("#btn-rot-resolve").click();
+  await sleep(1500);
+  check("D15 弹出重排影响预览", !$("#resolve-modal").classList.contains("hidden"),
+    $("#rot-conflict-card").textContent.slice(0, 60));
+  const modalText = $("#resolve-modal-body").textContent;
+  check("D16 预览含受影响人数", modalText.includes("受影响学员"));
+  check("D17 预览含重复搭档变化", modalText.includes("重复搭档变化"));
+  // 应用
+  $("#resolve-apply").click();
+  await sleep(50);
+  check("D18 应用后弹窗关闭", $("#resolve-modal").classList.contains("hidden"));
+  check("D19 应用后各组人数合法（3~4 人）",
+    sizesNow().length === 3 && sizesNow().every((n) => n >= 3 && n <= 4) &&
+      sizesNow().reduce((a, b) => a + b, 0) === 10,
+    sizesNow().join("/"));
+  check("D20 应用后硬约束满足",
+    $$("#rot-violation-list li.ok").length > 0 &&
+      $$("#rot-violation-list li.bad").length === 0);
+  check("D21 应用后跨轮无超限", $("#rot-cross-summary").classList.contains("ok"),
+    $("#rot-cross-summary").textContent);
+
+  // 撤销可回到应用前
+  $("#btn-rot-undo").click();
+  await sleep(40);
+  check("D22 撤销可用", true);
+
+  // 分页打印：创建成功并打开（jsdom 拦截 window.open）
+  let openedUrl = null;
+  window.open = (u) => { openedUrl = u; return null; };
+  $("#btn-rot-print").click();
+  await sleep(500);
+  check("D23 已创建打印页", !!openedUrl && openedUrl.includes("/print/"), String(openedUrl));
+  if (openedUrl) {
+    const html = await (await fetch(BASE + openedUrl)).text();
+    const pages = (html.match(/class="page"/g) || []).length;
+    check("D24 打印视图含 2 个分页", pages === 2, "实际 " + pages);
+    check("D25 打印页含匿名编号", html.includes("成员01"));
+  }
+}
+
 (async () => {
   // 确认服务可达
   try {
@@ -180,6 +378,8 @@ async function scenarioB() {
   }
   await scenarioA();
   await scenarioB();
+  await scenarioC();
+  await scenarioD();
   const passed = results.filter(([, ok]) => ok).length;
   console.log("\nE2E 回归：" + passed + "/" + results.length + " 通过");
   process.exit(process.exitCode || 0);

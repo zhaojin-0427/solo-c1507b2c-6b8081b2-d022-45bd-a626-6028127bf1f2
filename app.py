@@ -62,7 +62,7 @@ def normalize_rotation(raw, n_students):
                       2, 8, 2)
     rounds = []
     for i in range(n_rounds):
-        rr = raw_rounds[i] if isinstance(raw_rounds[i], dict) else {}
+        rr = raw_rounds[i] if i < len(raw_rounds) and isinstance(raw_rounds[i], dict) else {}
         ng = _clamp(rr.get("numGroups"), 1, 26, 3)
         mn = _clamp(rr.get("minSize"), 0, 99, 3)
         mx = _clamp(rr.get("maxSize"), 1, 99, max(6, mn))
@@ -245,11 +245,19 @@ def api_rotation_resolve():
     raw_rounds = data.get("currentRounds") or []
     current_rounds = []
     for ri, rr in enumerate(rot_raw["rounds"]):
-        groups = raw_rounds[ri] if ri < len(raw_rounds) and isinstance(raw_rounds[ri], list) else []
-        groups = [[sid for sid in grp if sid in valid] for grp in groups]
+        src = raw_rounds[ri] if ri < len(raw_rounds) and isinstance(raw_rounds[ri], list) else []
+        groups = [[sid for sid in grp if sid in valid] for grp in src]
+        # 丢弃空组后补齐到设置组数；不得用切片直接砍掉非空组（会丢成员）
+        groups = [g for g in groups if g]
         while len(groups) < rr["numGroups"]:
             groups.append([])
-        current_rounds.append(groups[:rr["numGroups"]])
+        if len(groups) > rr["numGroups"]:
+            # 组数偏多：把多出的非空组成员并入最末组，保证全员仍在编排中
+            extra = groups[rr["numGroups"]:]
+            groups = groups[:rr["numGroups"]]
+            for g in extra:
+                groups[-1].extend(g)
+        current_rounds.append(groups)
     from_round = _clamp(data.get("fromRound"), 0, len(rot_raw["rounds"]) - 1, 0)
     locks_in = data.get("locks") or {}
     locks_by_round = {}

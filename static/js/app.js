@@ -3,14 +3,24 @@
 
 /* ---------------- 全局状态 ---------------- */
 const state = {
+  mode: "single",       // 'single' | 'rotation'
   students: [],          // {id, name, tags:[]}
-  relations: [],         // {id, type:'must'|'cannot', a, b}
+  relations: [],         // {id, type:'must'|'cannot', a, b, scope:'all'|{rounds:[0基]}}
   settings: { numGroups: 3, minSize: 3, maxSize: 6, balanceTags: [], numSolutions: 3 },
-  solutions: [],         // 后端生成的方案 [{groups, soft, metrics, hardOk}]
+  solutions: [],         // 后端生成的单轮方案 [{groups, soft, metrics, hardOk}]
   current: -1,           // 当前采用的方案下标
   working: null,         // 当前编排 [[sid...], ...]
   locks: { members: new Set(), groups: new Set() },
   history: [],           // 撤销栈 [{groups, locks}]
+  // 多轮轮换
+  rotation: { rounds: [], balanceTags: [], cap: 2, maxCoverage: true, numPlans: 3 },
+  plans: [],             // 后端生成的轮换方案 [{rounds, coverage, maxRepeat, ...}]
+  planCur: -1,
+  roundsWorking: null,   // [[[sid...]...]...R]
+  activeRound: 0,
+  roundLocks: [],        // 每轮 {members:Set, groups:Set}
+  historyRot: [],        // 多轮撤销栈
+  matrixSort: -1,        // 同伴矩阵排序学员下标（-1 名单顺序）
   seq: 1,                // id 计数器
 };
 
@@ -46,7 +56,10 @@ $("#tabs").addEventListener("click", (e) => {
   if (!btn) return;
   $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
   $$(".tabpane").forEach(p => p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab));
-  if (btn.dataset.tab === "compare") renderCompare();
+  if (btn.dataset.tab === "compare") {
+    if (state.mode === "rotation") renderRotCompare();
+    else renderCompare();
+  }
   if (btn.dataset.tab === "saves") renderSaves();
 });
 
@@ -150,18 +163,90 @@ function renderRoster() {
   }
   renderRelations();
   renderTagOptions();
+  renderRotTagOptions();
+  renderRelScopePickers();
 }
 
 /* ================= 关系管理 ================= */
+function relIsActive(r, roundIdx) {
+  if (state.mode === "single") return true;
+  if (!r.scope || r.scope === "all") return true;
+  return (r.scope.rounds || []).includes(roundIdx);
+}
+
+function scopeSummary(r) {
+  if (state.mode === "single" || !r.scope || r.scope === "all") return "";
+  const rs = r.scope.rounds || [];
+  const R = state.rotation.rounds.length;
+  if (!rs.length || rs.length >= R) return "";
+  return rs.map(x => x + 1).join("、") + " 轮";
+}
+
 $("#btn-add-relation").addEventListener("click", () => {
   const a = $("#rel-a").value, b = $("#rel-b").value, type = $("#rel-type").value;
   if (!a || !b || a === b) { toast("请选择两名不同的学员", true); return; }
   const dup = state.relations.some(r =>
     (r.a === a && r.b === b) || (r.a === b && r.b === a));
   if (dup) { toast("两人之间已存在关系，请先删除旧关系", true); return; }
-  state.relations.push({ id: uid("r"), type, a, b });
+  let scope = "all";
+  if (state.mode === "rotation") {
+    const mode = ($$('input[name="rel-scope"]:checked')[0] || {}).value;
+    if (mode === "rounds") {
+      const picked = $$("#rel-scope-pickers .scope-chip.checked")
+        .map(c => parseInt(c.dataset.round, 10));
+      if (!picked.length) { toast("请选择该关系生效的轮次（或改为全程生效）", true); return; }
+      scope = { rounds: picked.sort((x, y) => x - y) };
+    }
+  }
+  state.relations.push({ id: uid("r"), type, a, b, scope });
   renderRelations();
 });
+
+function renderRelScopePickers() {
+  const row = $("#rel-scope-row");
+  const box = $("#rel-scope-pickers");
+  const hint = $("#rel-scope-hint");
+  if (state.mode !== "rotation") {
+    row.classList.add("hidden");
+    hint.classList.remove("hidden");
+    return;
+  }
+  row.classList.remove("hidden");
+  hint.classList.add("hidden");
+  const mode = ($$('input[name="rel-scope"]:checked')[0] || {}).value || "all";
+  box.innerHTML = "";
+  state.rotation.rounds.forEach((r, i) => {
+    const chip = document.createElement("span");
+    chip.className = "scope-chip" + (mode === "rounds" ? "" : " disabled");
+    chip.dataset.round = i;
+    chip.textContent = "第" + (i + 1) + "轮";
+    chip.addEventListener("click", () => {
+      if (mode !== "rounds") return;
+      chip.classList.toggle("checked");
+    });
+    box.appendChild(chip);
+  });
+  box.classList.toggle("hidden", mode !== "rounds");
+}
+
+$$('input[name="rel-scope"]').forEach(radio => {
+  radio.addEventListener("change", renderRelScopePickers);
+});
+
+function cycleRelScope(relId) {
+  if (state.mode !== "rotation") return;
+  const r = state.relations.find(x => x.id === relId);
+  if (!r) return;
+  const R = state.rotation.rounds.length;
+  const cur = (!r.scope || r.scope === "all") ? [] : (r.scope.rounds || []).slice();
+  // 循环：全程 → 第1轮 → 前2轮 → … → 全部轮次（回到全程）
+  let next;
+  if (cur.length === 0) next = [0];
+  else if (cur.length >= R) next = [0];
+  else next = Array.from({ length: Math.min(cur.length + 1, R) }, (_, i) => i);
+  r.scope = next.length >= R ? "all" : { rounds: next };
+  renderRelations();
+}
 
 function renderRelations() {
   const ul = $("#relation-list");
@@ -172,11 +257,19 @@ function renderRelations() {
   }
   for (const r of state.relations) {
     const li = document.createElement("li");
+    const txt = scopeSummary(r);
+    const scopeCls = (!r.scope || r.scope === "all") ? "all" : "partial";
+    const scopeLabel = txt ? txt : "全程";
     li.innerHTML =
       '<span class="rel-badge ' + r.type + '">' + (r.type === "must" ? "必须同组" : "不可同组") + "</span>" +
       '<span class="rel-names">' + esc(nameOf(r.a)) + " ↔ " + esc(nameOf(r.b)) + "</span>" +
+      (state.mode === "rotation"
+        ? '<button class="rel-scope ' + scopeCls + '" title="点击切换生效轮次">' + esc(scopeLabel) + "</button>"
+        : "") +
       '<button class="icon-btn" title="删除">✕</button>';
-    li.querySelector("button").addEventListener("click", () => {
+    const scopeBtn = li.querySelector(".rel-scope");
+    if (scopeBtn) scopeBtn.addEventListener("click", () => cycleRelScope(r.id));
+    li.querySelector(".icon-btn").addEventListener("click", () => {
       state.relations = state.relations.filter(x => x.id !== r.id);
       renderRelations();
     });
@@ -216,6 +309,123 @@ function renderTagOptions() {
   }
 }
 
+function renderRotTagOptions() {
+  const box = $("#rot-tag-options");
+  if (!box) return;
+  const tags = allTags();
+  if (!tags.length) {
+    box.innerHTML = '<span class="hint">学员还没有技能标签</span>';
+    return;
+  }
+  box.innerHTML = "";
+  for (const t of tags) {
+    const label = document.createElement("label");
+    label.className = "tag-option" + (state.rotation.balanceTags.includes(t) ? " checked" : "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = state.rotation.balanceTags.includes(t);
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.rotation.balanceTags.push(t);
+      else state.rotation.balanceTags = state.rotation.balanceTags.filter(x => x !== t);
+      label.classList.toggle("checked", cb.checked);
+    });
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(t));
+    box.appendChild(label);
+  }
+}
+
+/* ================= 模式切换 ================= */
+$("#mode-switch").addEventListener("click", (e) => {
+  const btn = e.target.closest(".mode-btn");
+  if (!btn) return;
+  setMode(btn.dataset.mode);
+});
+
+function setMode(mode) {
+  state.mode = mode;
+  $$("#mode-switch .mode-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.mode === mode));
+  $("#single-settings").classList.toggle("hidden", mode !== "single");
+  $("#rotation-settings").classList.toggle("hidden", mode !== "rotation");
+  renderRelations();
+  renderRelScopePickers();
+  renderWorkbenchVisibility();
+}
+
+/* ================= 多轮轮换设置 ================= */
+function defaultRoundRow() {
+  return { numGroups: state.settings.numGroups || 3,
+           minSize: state.settings.minSize || 3,
+           maxSize: state.settings.maxSize || 6 };
+}
+
+function ensureRotationRounds(n) {
+  while (state.rotation.rounds.length < n) state.rotation.rounds.push(defaultRoundRow());
+  state.rotation.rounds.length = n;
+  state.rotation.cap = Math.min(state.rotation.cap || 2, n);
+  while (state.roundLocks.length < n) {
+    state.roundLocks.push({ members: new Set(), groups: new Set() });
+  }
+  state.roundLocks.length = n;
+}
+
+function renderRotRoundsTable() {
+  const tbody = $("#rot-rounds-table tbody");
+  tbody.innerHTML = "";
+  state.rotation.rounds.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>第 " + (i + 1) + " 轮</td>" +
+      '<td><input type="number" min="1" max="26" data-k="numGroups" value="' + r.numGroups + '"></td>' +
+      '<td><input type="number" min="0" max="99" data-k="minSize" value="' + r.minSize + '"></td>' +
+      '<td><input type="number" min="1" max="99" data-k="maxSize" value="' + r.maxSize + '"></td>';
+    tr.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("change", () => {
+        let v = parseInt(inp.value, 10);
+        if (!Number.isFinite(v)) return;
+        v = Math.max(inp.min ? parseInt(inp.min, 10) : 0,
+                     Math.min(inp.max ? parseInt(inp.max, 10) : 99, v));
+        inp.value = v;
+        state.rotation.rounds[i][inp.dataset.k] = v;
+      });
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+$("#rot-rounds").addEventListener("change", () => {
+  let n = parseInt($("#rot-rounds").value, 10) || 2;
+  n = Math.max(2, Math.min(8, n));
+  $("#rot-rounds").value = n;
+  ensureRotationRounds(n);
+  $("#rot-cap").max = n;
+  if (state.rotation.cap > n) { state.rotation.cap = n; $("#rot-cap").value = n; }
+  renderRotRoundsTable();
+  renderRelScopePickers();
+});
+$("#rot-cap").addEventListener("change", () => {
+  let v = parseInt($("#rot-cap").value, 10) || 1;
+  const R = state.rotation.rounds.length;
+  v = Math.max(1, Math.min(R, v));
+  $("#rot-cap").value = v;
+  state.rotation.cap = v;
+});
+$("#rot-plans").addEventListener("change", () => {
+  state.rotation.numPlans = Math.max(1, Math.min(6, parseInt($("#rot-plans").value, 10) || 3));
+});
+$("#rot-max-coverage").addEventListener("change", (e) => {
+  state.rotation.maxCoverage = e.target.checked;
+});
+
+function collectRotationSettings() {
+  const R = Math.max(2, Math.min(8, parseInt($("#rot-rounds").value, 10) || 2));
+  ensureRotationRounds(R);
+  state.rotation.cap = Math.max(1, Math.min(R, parseInt($("#rot-cap").value, 10) || 1));
+  state.rotation.numPlans = Math.max(1, Math.min(6, parseInt($("#rot-plans").value, 10) || 3));
+  state.rotation.maxCoverage = $("#rot-max-coverage").checked;
+}
+
 function collectSettings() {
   state.settings.numGroups = parseInt($("#set-groups").value, 10) || 3;
   state.settings.minSize = parseInt($("#set-min").value, 10) || 0;
@@ -229,10 +439,20 @@ function renderSettings() {
   $("#set-max").value = state.settings.maxSize;
   $("#set-solutions").value = state.settings.numSolutions;
   renderTagOptions();
+  // 多轮轮换设置
+  if (!state.rotation.rounds.length) ensureRotationRounds(3);
+  $("#rot-rounds").value = state.rotation.rounds.length;
+  $("#rot-cap").value = state.rotation.cap;
+  $("#rot-cap").max = state.rotation.rounds.length;
+  $("#rot-plans").value = state.rotation.numPlans;
+  $("#rot-max-coverage").checked = state.rotation.maxCoverage;
+  renderRotRoundsTable();
+  renderRotTagOptions();
 }
 
 /* ================= 生成方案 ================= */
 $("#btn-generate").addEventListener("click", async () => {
+  if (state.mode === "rotation") { $("#btn-rot-generate").click(); return; }
   collectSettings();
   if (!state.students.length) { toast("请先录入学员", true); return; }
   const btn = $("#btn-generate");
@@ -271,7 +491,11 @@ $("#btn-generate").addEventListener("click", async () => {
 function buildConflictItem(c) {
   const div = document.createElement("div");
   div.className = "conflict-item";
-  let html = "<p>" + esc(c.message) + "</p>";
+  let tag = "";
+  if (c.cross) tag = '<span class="round-tag cross">跨轮限制</span>';
+  else if (Number.isInteger(c.round) && c.round >= 0)
+    tag = '<span class="round-tag">第 ' + (c.round + 1) + " 轮</span>";
+  let html = "<p>" + tag + esc(c.message) + "</p>";
   if (c.chain && c.chain.length) {
     // 冲突链路：A —必须→ B —不可→ C
     html += '<div class="chain">';
@@ -379,6 +603,7 @@ $("#btn-print").addEventListener("click", async () => {
   if (!state.working) return;
   try {
     const data = await api("/api/prints", "POST", {
+      mode: "single",
       title: "分组结果",
       students: state.students,
       groups: state.working,
@@ -390,19 +615,17 @@ $("#btn-print").addEventListener("click", async () => {
 });
 
 /* ---------- 本地即时校验 ---------- */
-function validateWorking() {
+function validateGroups(groups, minSize, maxSize, rels) {
   const v = [];
-  if (!state.working) return v;
-  const { minSize, maxSize } = state.settings;
-  state.working.forEach((grp, gi) => {
+  groups.forEach((grp, gi) => {
     if (grp.length < minSize)
       v.push({ type: "size", group: gi, people: [], message: "第 " + (gi + 1) + " 组 " + grp.length + " 人，少于下限 " + minSize + " 人" });
     if (grp.length > maxSize)
       v.push({ type: "size", group: gi, people: [], message: "第 " + (gi + 1) + " 组 " + grp.length + " 人，超出上限 " + maxSize + " 人" });
   });
   const groupOf = {};
-  state.working.forEach((grp, gi) => grp.forEach(sid => { groupOf[sid] = gi; }));
-  for (const r of state.relations) {
+  groups.forEach((grp, gi) => grp.forEach(sid => { groupOf[sid] = gi; }));
+  for (const r of rels) {
     const ga = groupOf[r.a], gb = groupOf[r.b];
     if (ga === undefined || gb === undefined) continue;
     if (r.type === "cannot" && ga === gb)
@@ -413,9 +636,14 @@ function validateWorking() {
   return v;
 }
 
+function validateWorking() {
+  if (!state.working) return [];
+  const { minSize, maxSize } = state.settings;
+  return validateGroups(state.working, minSize, maxSize, state.relations);
+}
+
 /* 软约束报告（与后端 evaluate_solution 同规则） */
-function softReport() {
-  const groups = state.working;
+function softReportGroups(groups, tags, settingsNumGroups) {
   const g = groups.length;
   const total = groups.reduce((s, x) => s + x.length, 0);
   const ideal = total / g;
@@ -427,10 +655,9 @@ function softReport() {
   });
   const tagsOf = {};
   state.students.forEach(s => { tagsOf[s.id] = new Set(s.tags); });
-  for (const tag of state.settings.balanceTags) {
+  for (const tag of tags) {
     const counts = groups.map(grp => grp.filter(sid => (tagsOf[sid] || new Set()).has(tag)).length);
-    const tot = counts.reduce((a, b) => a + b, 0);
-    const mean = tot / g;
+    const mean = counts.reduce((a, b) => a + b, 0) / g;
     const tlo = Math.floor(mean), thi = Math.ceil(mean);
     counts.forEach((c, gi) => {
       if (c < tlo || c > thi)
@@ -440,12 +667,26 @@ function softReport() {
   return items;
 }
 
+function softReport() {
+  if (!state.working) return [];
+  return softReportGroups(state.working, state.settings.balanceTags);
+}
+
 /* ---------- 渲染排演台 ---------- */
+function renderWorkbenchVisibility() {
+  const rot = state.mode === "rotation" && state.roundsWorking;
+  const single = state.mode === "single" && state.working;
+  $("#wb-empty").classList.toggle("hidden", !single || rot);
+  $("#wb-main").classList.toggle("hidden", !single || rot);
+  $("#rot-empty").classList.toggle("hidden", !rot);
+  $("#rot-main").classList.toggle("hidden", !rot);
+}
+
 function renderWorkbench() {
   const has = !!state.working;
-  $("#wb-empty").classList.toggle("hidden", has);
-  $("#wb-main").classList.toggle("hidden", !has);
+  renderWorkbenchVisibility();
   $("#wb-conflict-card").classList.add("hidden");  // 编排/锁定已变化，旧的冲突报告失效
+  if (state.mode === "rotation") { renderRotWorkbench(); return; }
   if (!has) return;
 
   // 方案页签
@@ -695,15 +936,23 @@ $("#btn-save").addEventListener("click", async () => {
   const name = $("#save-name").value.trim() ||
     "方案 " + new Date().toLocaleString("zh-CN", { hour12: false });
   try {
-    await api("/api/saves", "POST", {
+    const payload = {
       name,
+      mode: state.mode,
       students: state.students,
       relations: state.relations,
       settings: state.settings,
       solutions: state.solutions,
       working: state.working,
       locks: { members: [...state.locks.members], groups: [...state.locks.groups] },
-    });
+    };
+    if (state.mode === "rotation") {
+      payload.rotation = state.rotation;
+      payload.plans = state.plans;
+      payload.roundsWorking = state.roundsWorking;
+      payload.roundLocks = roundLocksSerialize();
+    }
+    await api("/api/saves", "POST", payload);
     $("#save-name").value = "";
     toast("已保存：" + name);
     renderSaves();
@@ -714,19 +963,22 @@ $("#btn-save").addEventListener("click", async () => {
 
 async function renderSaves() {
   const tbody = $("#saves-table tbody");
-  tbody.innerHTML = '<tr><td colspan="5" class="hint">加载中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="hint">加载中…</td></tr>';
   try {
     const data = await api("/api/saves");
     tbody.innerHTML = "";
     if (!data.saves.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="hint">暂无存档</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="hint">暂无存档</td></tr>';
       return;
     }
     for (const sv of data.saves) {
       const tr = document.createElement("tr");
       const time = new Date(sv.createdAt * 1000).toLocaleString("zh-CN", { hour12: false });
+      const modeBadge = sv.mode === "rotation"
+        ? '<span class="mode-badge rotation">多轮' + (sv.roundCount ? "·" + sv.roundCount + "轮" : "") + "</span>"
+        : '<span class="mode-badge single">单轮</span>';
       tr.innerHTML =
-        "<td>" + esc(sv.name) + "</td><td>" + time + "</td>" +
+        "<td>" + esc(sv.name) + "</td><td>" + modeBadge + "</td><td>" + time + "</td>" +
         "<td>" + sv.studentCount + "</td><td>" + sv.solutionCount + "</td>" +
         '<td><button class="btn" data-act="load">恢复</button> ' +
         '<button class="btn ghost danger" data-act="del">删除</button></td>';
@@ -740,7 +992,7 @@ async function renderSaves() {
       tbody.appendChild(tr);
     }
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="5" class="hint">加载失败</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="hint">加载失败</td></tr>';
   }
 }
 
@@ -748,7 +1000,10 @@ async function loadSave(id) {
   try {
     const data = await api("/api/saves/" + id);
     state.students = data.students || [];
-    state.relations = (data.relations || []).map(r => ({ id: uid("r"), type: r.type, a: r.a, b: r.b }));
+    state.relations = (data.relations || []).map(r => ({
+      id: uid("r"), type: r.type, a: r.a, b: r.b,
+      scope: r.scope || "all",
+    }));
     state.settings = Object.assign(state.settings, data.settings || {});
     state.solutions = data.solutions || [];
     state.current = state.solutions.length ? 0 : -1;
@@ -760,6 +1015,26 @@ async function loadSave(id) {
       groups: new Set(lk.groups || []),
     };
     state.history = [];
+
+    if (data.mode === "rotation" && data.rotation) {
+      setMode("rotation");
+      state.rotation = data.rotation;
+      state.plans = data.plans || [];
+      state.planCur = state.plans.length ? 0 : -1;
+      state.roundsWorking = data.roundsWorking
+        ? data.roundsWorking.map(g => cloneGroups(g))
+        : (state.plans.length ? state.plans[0].rounds.map(g => cloneGroups(g)) : null);
+      const R = state.rotation.rounds.length;
+      const rl = data.roundLocks || {};
+      state.roundLocks = Array.from({ length: R }, (_, i) => ({
+        members: new Set((rl[i] || rl[String(i)] || {}).members || []),
+        groups: new Set((rl[i] || rl[String(i)] || {}).groups || []),
+      }));
+      state.activeRound = 0;
+      state.historyRot = [];
+    } else {
+      setMode("single");
+    }
     renderRoster();
     renderSettings();
     renderWorkbench();
@@ -770,7 +1045,615 @@ async function loadSave(id) {
   }
 }
 
+/* ================= 多轮轮换 ================= */
+function cloneRounds(r) { return r.map(g => cloneGroups(g)); }
+function roundLocksSerialize() {
+  const out = {};
+  state.roundLocks.forEach((lk, i) => {
+    if (lk.members.size || lk.groups.size)
+      out[i] = { members: [...lk.members], groups: [...lk.groups] };
+  });
+  return out;
+}
+function roundLocksOf(ri) {
+  if (!state.roundLocks[ri]) state.roundLocks[ri] = { members: new Set(), groups: new Set() };
+  return state.roundLocks[ri];
+}
+function pushHistoryRot() {
+  state.historyRot.push({
+    rounds: cloneRounds(state.roundsWorking),
+    locks: state.roundLocks.map(l => ({ members: new Set(l.members), groups: new Set(l.groups) })),
+    activeRound: state.activeRound,
+  });
+  if (state.historyRot.length > 60) state.historyRot.shift();
+}
+
+/* 同伴矩阵（前端按当前编排即时计算） */
+function computePairMatrix() {
+  const ids = state.students.map(s => s.id);
+  const pos = {};
+  ids.forEach((id, i) => { pos[id] = i; });
+  const n = ids.length;
+  const m = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let i = 0; i < n; i++) m[i][i] = -1;
+  for (const groups of state.roundsWorking) {
+    for (const grp of groups) {
+      for (let x = 0; x < grp.length; x++) {
+        for (let y = x + 1; y < grp.length; y++) {
+          const a = pos[grp[x]], b = pos[grp[y]];
+          m[a][b]++; m[b][a]++;
+        }
+      }
+    }
+  }
+  return m;
+}
+
+function rotationStats() {
+  const m = computePairMatrix();
+  const n = state.students.length;
+  let covered = 0, maxRepeat = 0;
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++) {
+      if (m[i][j] > 0) covered++;
+      if (m[i][j] > maxRepeat) maxRepeat = m[i][j];
+    }
+  const total = n * (n - 1) / 2;
+  const cap = state.rotation.cap;
+  const capHits = [];
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++)
+      if (m[i][j] > cap) capHits.push({ a: state.students[i].id, b: state.students[j].id, count: m[i][j] });
+  capHits.sort((x, y) => y.count - x.count);
+  return { matrix: m, coverage: total ? covered / total : 1, covered, total, maxRepeat, capHits };
+}
+
+/* ---------- 生成轮换方案 ---------- */
+$("#btn-rot-generate").addEventListener("click", async () => {
+  collectRotationSettings();
+  if (!state.students.length) { toast("请先录入学员", true); return; }
+  // 前端快速预检：各轮容量
+  const n = state.students.length;
+  for (let i = 0; i < state.rotation.rounds.length; i++) {
+    const r = state.rotation.rounds[i];
+    if (n < r.numGroups * r.minSize || n > r.numGroups * r.maxSize) {
+      toast("第 " + (i + 1) + " 轮的组数与人数范围无法容纳 " + n + " 名学员", true);
+      return;
+    }
+  }
+  const btn = $("#btn-rot-generate");
+  btn.disabled = true;
+  btn.textContent = "轮换求解中…";
+  try {
+    const data = await api("/api/rotation/generate", "POST", {
+      students: state.students,
+      relations: state.relations,
+      rotation: {
+        rounds: state.rotation.rounds,
+        balanceTags: state.rotation.balanceTags,
+        cap: state.rotation.cap,
+        maxCoverage: state.rotation.maxCoverage,
+        numPlans: state.rotation.numPlans,
+      },
+    });
+    if (data.rotation) state.rotation = Object.assign(state.rotation, data.rotation);
+    if (data.conflicts && data.conflicts.length) {
+      renderConflicts(data.conflicts);
+      state.plans = [];
+      state.planCur = -1;
+      state.roundsWorking = null;
+      renderWorkbenchVisibility();
+      toast("发现 " + data.conflicts.length + " 处冲突，无法生成轮换方案", true);
+    } else {
+      $("#conflict-card").classList.add("hidden");
+      state.plans = data.plans || [];
+      state.planCur = state.plans.length ? 0 : -1;
+      state.roundsWorking = state.plans.length ? cloneRounds(state.plans[0].rounds) : null;
+      const R = state.rotation.rounds.length;
+      state.roundLocks = Array.from({ length: R }, () => ({ members: new Set(), groups: new Set() }));
+      state.activeRound = 0;
+      state.historyRot = [];
+      renderWorkbench();
+      toast("已生成 " + state.plans.length + " 套完整轮换方案");
+      document.querySelector('.tab[data-tab="workbench"]').click();
+    }
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "一次生成完整轮换方案";
+  }
+});
+
+/* ---------- 多轮换台渲染 ---------- */
+function renderRotWorkbench() {
+  const has = !!state.roundsWorking;
+  $("#rot-empty").classList.toggle("hidden", has);
+  $("#rot-main").classList.toggle("hidden", !has);
+  if (!has) return;
+  $("#rot-conflict-card").classList.add("hidden");
+
+  // 方案页签
+  const tabs = $("#rot-plan-tabs");
+  tabs.innerHTML = "";
+  state.plans.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.className = "sol-tab" + (i === state.planCur ? " active" : "");
+    b.innerHTML = "方案 " + (i + 1) +
+      '<span class="badge ' + (p.maxRepeat <= state.rotation.cap ? "ok" : "warn") + '">' +
+      "覆盖 " + Math.round(p.coverage * 100) + "% · 重复≤" + p.maxRepeat + "</span>";
+    b.addEventListener("click", () => {
+      state.planCur = i;
+      state.roundsWorking = cloneRounds(p.rounds);
+      state.roundLocks = state.roundLocks.map(() => ({ members: new Set(), groups: new Set() }));
+      state.activeRound = 0;
+      state.historyRot = [];
+      renderRotWorkbench();
+    });
+    tabs.appendChild(b);
+  });
+
+  // 轮次页签
+  const rt = $("#round-tabs");
+  rt.innerHTML = "";
+  state.roundsWorking.forEach((groups, ri) => {
+    const b = document.createElement("button");
+    const lk = roundLocksOf(ri);
+    b.className = "round-tab" + (ri === state.activeRound ? " active" : "");
+    if (lk.members.size || lk.groups.size) b.classList.add("frozen");
+    const rc = state.rotation.rounds[ri];
+    b.innerHTML = "第 " + (ri + 1) + " 轮" +
+      '<span class="rt-meta">' + rc.numGroups + " 组 · " + rc.minSize + "–" + rc.maxSize + " 人</span>";
+    b.addEventListener("click", () => { state.activeRound = ri; renderRotWorkbench(); });
+    rt.appendChild(b);
+  });
+  $("#rot-resolve-label").textContent = (state.activeRound + 1) + " 轮";
+
+  renderRotRoundCards();
+  renderRotStatusAndMatrix();
+}
+
+function renderRotRoundCards() {
+  const ri = state.activeRound;
+  const groups = state.roundsWorking[ri];
+  const rc = state.rotation.rounds[ri];
+  const lk = roundLocksOf(ri);
+  const rels = state.relations.filter(r => relIsActive(r, ri));
+  const violations = validateGroups(groups, rc.minSize, rc.maxSize, rels);
+  const badGroups = new Set(), badPeople = new Set();
+  violations.forEach(v => {
+    if (v.group >= 0) badGroups.add(v.group);
+    v.people.forEach(p => badPeople.add(p));
+  });
+
+  const grid = $("#rot-groups-grid");
+  grid.innerHTML = "";
+  groups.forEach((grp, gi) => {
+    const card = document.createElement("div");
+    card.className = "group-card";
+    if (lk.groups.has(gi)) card.classList.add("locked");
+    if (badGroups.has(gi)) card.classList.add("violating");
+    card.dataset.group = gi;
+
+    const sizeOk = grp.length >= rc.minSize && grp.length <= rc.maxSize;
+    const head = document.createElement("div");
+    head.className = "group-head";
+    head.innerHTML =
+      "<h3>第 " + (gi + 1) + " 组</h3>" +
+      '<span class="group-size' + (sizeOk ? "" : " over") + '">' +
+      grp.length + " / " + rc.minSize + "–" + rc.maxSize + " 人</span>" +
+      '<button class="group-lock" title="' + (lk.groups.has(gi) ? "解锁整组" : "锁定整组") + '">' +
+      (lk.groups.has(gi) ? "🔒" : "🔓") + "</button>";
+    head.querySelector(".group-lock").addEventListener("click", () => {
+      pushHistoryRot();
+      if (lk.groups.has(gi)) lk.groups.delete(gi);
+      else lk.groups.add(gi);
+      renderRotWorkbench();
+    });
+    card.appendChild(head);
+
+    const area = document.createElement("div");
+    area.className = "member-area";
+    if (!grp.length) area.innerHTML = '<span class="group-empty">拖拽成员到这里</span>';
+    for (const sid of grp) area.appendChild(renderRotMemberChip(sid, ri, badPeople.has(sid)));
+    card.appendChild(area);
+
+    card.addEventListener("dragover", (e) => {
+      if (lk.groups.has(gi)) return;
+      e.preventDefault();
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      if (lk.groups.has(gi)) { toast("第 " + (gi + 1) + " 组已整组锁定", true); return; }
+      const sid = e.dataTransfer.getData("text/plain");
+      const srcRound = parseInt(e.dataTransfer.getData("x-round"), 10);
+      if (Number.isInteger(srcRound) && srcRound !== ri) {
+        toast("成员只能在同一轮的组间拖动", true);
+        return;
+      }
+      if (sid) moveRotMember(sid, ri, gi);
+    });
+    grid.appendChild(card);
+  });
+
+  // 本轮违规列表
+  const vl = $("#rot-violation-list");
+  vl.innerHTML = violations.length
+    ? violations.map(v => '<li class="bad">✕ ' + esc(v.message) + "</li>").join("")
+    : '<li class="ok">✓ 本轮人数范围与生效关系均满足</li>';
+}
+
+function renderRotMemberChip(sid, ri, violating) {
+  const s = studentOf(sid);
+  const lk = roundLocksOf(ri);
+  const chip = document.createElement("span");
+  if (!s) {
+    chip.className = "member-chip violating";
+    chip.textContent = "未知成员";
+    return chip;
+  }
+  const locked = lk.members.has(sid);
+  chip.className = "member-chip" + (locked ? " locked" : "") + (violating ? " violating" : "");
+  chip.draggable = !locked;
+  chip.dataset.sid = sid;
+  chip.title = "编号 " + numOf(sid) + (s.tags.length ? " · " + s.tags.join("、") : "");
+  chip.innerHTML =
+    "<span>" + esc(s.name) + "</span>" +
+    (s.tags.length ? '<span class="m-tags">' + esc(s.tags.slice(0, 2).join("/")) + "</span>" : "") +
+    '<button class="m-lock" title="' + (locked ? "解锁成员" : "锁定成员") + '">' + (locked ? "🔒" : "🔓") + "</button>";
+  chip.querySelector(".m-lock").addEventListener("click", (e) => {
+    e.stopPropagation();
+    pushHistoryRot();
+    if (lk.members.has(sid)) lk.members.delete(sid);
+    else lk.members.add(sid);
+    renderRotWorkbench();
+  });
+  chip.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("text/plain", sid);
+    e.dataTransfer.setData("x-round", String(ri));
+    e.dataTransfer.effectAllowed = "move";
+    setTimeout(() => chip.classList.add("dragging"), 0);
+  });
+  chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+  return chip;
+}
+
+function moveRotMember(sid, ri, targetGi) {
+  const lk = roundLocksOf(ri);
+  if (lk.members.has(sid)) { toast("该成员本轮已锁定", true); return; }
+  const groups = state.roundsWorking[ri];
+  const fromGi = groups.findIndex(g => g.includes(sid));
+  if (fromGi === -1 || fromGi === targetGi) return;
+  if (lk.groups.has(fromGi)) { toast("来源组已整组锁定", true); return; }
+  pushHistoryRot();
+  groups[fromGi] = groups[fromGi].filter(x => x !== sid);
+  groups[targetGi].push(sid);
+  renderRotWorkbench();
+  const rc = state.rotation.rounds[ri];
+  const rels = state.relations.filter(r => relIsActive(r, ri));
+  const fresh = validateGroups(groups, rc.minSize, rc.maxSize, rels)
+    .filter(v => v.group === targetGi || v.group === fromGi || v.people.includes(sid));
+  if (fresh.length) toast("⚠ " + fresh[0].message, true);
+}
+
+/* ---------- 状态摘要 + 同伴矩阵 ---------- */
+function renderRotStatusAndMatrix() {
+  const ri = state.activeRound;
+  const lk = roundLocksOf(ri);
+  const parts = [];
+  if (lk.members.size) parts.push(lk.members.size + " 名成员已锁定");
+  if (lk.groups.size) parts.push(lk.groups.size + " 个整组已锁定");
+  $("#rot-lock-summary").textContent = "第 " + (ri + 1) + " 轮 · " +
+    (parts.length ? "🔒 " + parts.join("，") : "本轮未锁定");
+
+  const stats = rotationStats();
+  const vs = $("#rot-violation-summary");
+  vs.textContent = "✓ 本轮硬约束满足";
+  vs.className = "ok";
+  const cs = $("#rot-cross-summary");
+  const capOk = stats.capHits.length === 0;
+  cs.textContent = capOk
+    ? "跨轮：覆盖率 " + (stats.coverage * 100).toFixed(1) + "%（" + stats.covered + "/" + stats.total +
+      " 对）· 最高重复 " + stats.maxRepeat + " 次 · 上限 " + state.rotation.cap + " 次"
+    : "⚠ " + stats.capHits.length + " 对学员同组超过上限 " + state.rotation.cap + " 次";
+  cs.className = capOk ? "ok" : "bad";
+
+  // 指标列表
+  const ml = $("#rot-metrics-list");
+  const tagRows = [];
+  const p = state.plans[state.planCur];
+  if (p && p.tagDeviation && p.tagDeviation[ri]) {
+    for (const tag of state.rotation.balanceTags) {
+      const td = p.tagDeviation[ri].tags[tag];
+      if (td) tagRows.push([tag, td]);
+    }
+  }
+  let html =
+    '<li class="' + (capOk ? "ok" : "bad") + '">同伴覆盖率：' + (stats.coverage * 100).toFixed(1) +
+    "%（" + stats.covered + "/" + stats.total + " 对曾同组）</li>" +
+    '<li class="' + (stats.maxRepeat <= state.rotation.cap ? "ok" : "bad") + '">最高同组重复：' +
+    stats.maxRepeat + " 次（上限 " + state.rotation.cap + "）</li>" +
+    '<li class="hint">未曾同组组合：' + (stats.total - stats.covered) + " 对</li>";
+  if (tagRows.length) {
+    html += tagRows.map(([tag, td]) =>
+      '<li class="warn">第 ' + (ri + 1) + ' 轮标签「' + esc(tag) + "」分布 " +
+      td.counts.join("/") + "，偏差 " + td.deviation + "</li>").join("");
+  }
+  ml.innerHTML = html;
+
+  renderMatrix(stats);
+}
+
+function renderMatrix(stats) {
+  const table = $("#rot-matrix");
+  const n = state.students.length;
+  const order = [];
+  if (state.matrixSort >= 0) {
+    const col = state.matrixSort;
+    const ids = state.students.map((s, i) => i);
+    ids.sort((a, b) => (stats.matrix[b][col] - stats.matrix[a][col]) || a - b);
+    order.push(col);
+    ids.forEach(i => { if (i !== col) order.push(i); });
+  } else {
+    for (let i = 0; i < n; i++) order.push(i);
+  }
+  let html = "<thead><tr><th class='corner'>编号＼编号</th>";
+  order.forEach(i => {
+    html += "<th data-i='" + i + "' title='" + esc(state.students[i].name) + "'>" +
+      String(i + 1).padStart(2, "0") + "</th>";
+  });
+  html += "</tr></thead><tbody>";
+  order.forEach(i => {
+    html += "<tr><th>" + String(i + 1).padStart(2, "0") + " " + esc(state.students[i].name) + "</th>";
+    order.forEach(j => {
+      const v = stats.matrix[i][j];
+      let cls;
+      if (i === j) cls = "mdiag";
+      else if (v > state.rotation.cap) cls = "mcap";
+      else cls = "m" + Math.min(v, 3);
+      const shown = v < 0 ? "·" : v;
+      const title = i === j ? "" :
+        esc(state.students[i].name) + " × " + esc(state.students[j].name) + "：同组 " + v + " 轮" +
+        (v === 0 ? "（未曾同组）" : "");
+      html += '<td class="' + cls + '" title="' + title + '">' + shown + "</td>";
+    });
+    html += "</tr>";
+  });
+  html += "</tbody>";
+  table.innerHTML = html;
+  table.querySelectorAll("thead th[data-i]").forEach(th => {
+    th.addEventListener("click", () => {
+      const i = parseInt(th.dataset.i, 10);
+      state.matrixSort = state.matrixSort === i ? -1 : i;
+      renderMatrix(stats);
+    });
+  });
+  $("#rot-matrix-legend").textContent =
+    "色阶：灰=未曾同组(0)，蓝色越深同组轮数越多，红底=超过上限(" + state.rotation.cap +
+    ")；对角线「·」为本人。共 " + (stats.total - stats.covered) + " 对学员从未同组。";
+}
+
+/* ---------- 撤销 / 清锁 / 打印 ---------- */
+$("#btn-rot-undo").addEventListener("click", () => {
+  const prev = state.historyRot.pop();
+  if (!prev) { toast("没有可撤销的操作"); return; }
+  state.roundsWorking = prev.rounds;
+  state.roundLocks = prev.locks;
+  state.activeRound = prev.activeRound;
+  renderRotWorkbench();
+  toast("已撤销");
+});
+
+$("#btn-rot-clear-locks").addEventListener("click", () => {
+  const lk = roundLocksOf(state.activeRound);
+  if (!lk.members.size && !lk.groups.size) return;
+  pushHistoryRot();
+  state.roundLocks[state.activeRound] = { members: new Set(), groups: new Set() };
+  renderRotWorkbench();
+});
+
+$("#btn-rot-print").addEventListener("click", async () => {
+  if (!state.roundsWorking) return;
+  try {
+    const data = await api("/api/prints", "POST", {
+      mode: "rotation",
+      title: "多轮轮换分组",
+      students: state.students,
+      rounds: state.roundsWorking,
+      roundNames: state.roundsWorking.map((_, i) => "第 " + (i + 1) + " 轮分组"),
+    });
+    window.open("/print/" + data.id + "?anon=1", "_blank");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+/* ---------- 从本轮起重排（影响预览 → 应用） ---------- */
+let pendingResolve = null;
+
+$("#btn-rot-resolve").addEventListener("click", async () => {
+  const fromRound = state.activeRound;
+  const lk = roundLocksOf(fromRound);
+  const btn = $("#btn-rot-resolve");
+  btn.disabled = true;
+  btn.textContent = "计算重排影响中…";
+  try {
+    const locks = {};
+    locks[fromRound] = { members: [...lk.members], groups: [...lk.groups] };
+    const data = await api("/api/rotation/resolve", "POST", {
+      students: state.students,
+      relations: state.relations,
+      rotation: {
+        rounds: state.rotation.rounds,
+        balanceTags: state.rotation.balanceTags,
+        cap: state.rotation.cap,
+        maxCoverage: state.rotation.maxCoverage,
+      },
+      currentRounds: state.roundsWorking,
+      fromRound,
+      locks,
+    });
+    if (data.conflicts && data.conflicts.length) {
+      const card = $("#rot-conflict-card");
+      card.classList.remove("hidden");
+      const box = $("#rot-conflict-list");
+      box.innerHTML = "";
+      data.conflicts.forEach(c => box.appendChild(buildConflictItem(c)));
+      toast(data.conflicts[0].message, true);
+      return;
+    }
+    showResolvePreview(data.payload);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⚙ 锁定此前各轮，从第 " + (state.activeRound + 1) + " 轮起重排后续";
+  }
+});
+
+function showResolvePreview(payload) {
+  pendingResolve = payload;
+  const names = (id) => nameOf(id);
+  const changes = payload.repeatChanges;
+  const fmt = (x) => "「" + esc(names(x.a)) + "–" + esc(names(x.b)) + "」 " + x.before + "→" + x.after;
+  let html =
+    '<p>将保持 <b>第 1～' + payload.fromRound + ' 轮</b>不变，重排 <b>第 ' +
+    (payload.fromRound + 1) + "～" + state.rotation.rounds.length + ' 轮</b>。</p>' +
+    '<p><b>受影响学员：' + payload.affectedCount + ' 人</b></p>';
+  if (payload.affected.length) {
+    html += '<div class="affected-chips">' +
+      payload.affected.map(id => '<span class="node">' + esc(names(id)) + "</span>").join("") + "</div>";
+  }
+  html += "<p style='margin-top:12px'><b>重复搭档变化</b>：" +
+    "新增重复 " + changes.moreCount + " 对，减少重复 " + changes.lessCount + " 对</p>";
+  if (changes.more.length) {
+    html += '<div>同组次数增加：<ul class="change-list">' +
+      changes.more.slice(0, 8).map(x => '<li class="up">▲ ' + fmt(x) + "</li>").join("") + "</ul></div>";
+  }
+  if (changes.less.length) {
+    html += '<div>同组次数减少：<ul class="change-list">' +
+      changes.less.slice(0, 8).map(x => '<li class="down">▼ ' + fmt(x) + "</li>").join("") + "</ul></div>";
+  }
+  html += '<p class="hint">新方案覆盖率 ' + (payload.metrics.coverage * 100).toFixed(1) +
+    "% · 最高重复 " + payload.metrics.maxRepeat + " 次。应用前的编排可用「撤销」恢复。</p>";
+  $("#resolve-modal-body").innerHTML = html;
+  $("#resolve-modal").classList.remove("hidden");
+}
+
+$("#resolve-cancel").addEventListener("click", () => {
+  pendingResolve = null;
+  $("#resolve-modal").classList.add("hidden");
+});
+$("#resolve-apply").addEventListener("click", () => {
+  if (!pendingResolve) return;
+  pushHistoryRot();
+  state.roundsWorking = cloneRounds(pendingResolve.rounds);
+  // 重排后的轮次清除锁定（之前轮次保留）；回到起始轮
+  for (let ri = pendingResolve.fromRound + 1; ri < state.roundLocks.length; ri++) {
+    state.roundLocks[ri] = { members: new Set(), groups: new Set() };
+  }
+  state.activeRound = pendingResolve.fromRound;
+  $("#resolve-modal").classList.add("hidden");
+  pendingResolve = null;
+  renderRotWorkbench();
+  toast("已重排第 " + (state.activeRound + 1) + " 轮及之后各轮");
+});
+
+/* ---------- 轮换方案对比 ---------- */
+function tagDeviationTotal(p, ri) {
+  let s = 0;
+  const row = p.tagDeviation && p.tagDeviation[ri];
+  if (!row) return 0;
+  for (const k in row.tags) s += row.tags[k].deviation;
+  return Math.round(s * 10) / 10;
+}
+
+function renderRotCompare() {
+  const has = state.plans.length > 0;
+  $("#rot-cmp-empty").classList.toggle("hidden", has);
+  $("#rot-cmp-main").classList.toggle("hidden", !has);
+  $("#cmp-empty").classList.add("hidden");
+  $("#cmp-main").classList.add("hidden");
+  if (!has) return;
+
+  const plans = state.plans;
+  const R = state.rotation.rounds.length;
+  const bestCov = Math.max(...plans.map(p => p.coverage));
+  const bestRepeat = Math.min(...plans.map(p => p.maxRepeat));
+
+  let html = "<thead><tr><th>指标</th>";
+  plans.forEach((p, i) => { html += "<th>方案 " + (i + 1) + "</th>"; });
+  html += "</tr></thead><tbody>";
+
+  html += "<tr><td>同伴覆盖率</td>";
+  plans.forEach(p => {
+    const cls = p.coverage === bestCov ? "cmp-best" : "cmp-worst";
+    html += '<td class="' + cls + '">' + (p.coverage * 100).toFixed(1) + "%</td>";
+  });
+  html += "</tr>";
+
+  html += "<tr><td>覆盖同伴对数</td>";
+  plans.forEach(p => { html += "<td>" + p.coveredPairs + " / " + p.totalPairs + "</td>"; });
+  html += "</tr>";
+
+  html += "<tr><td>最高同组重复次数</td>";
+  plans.forEach(p => {
+    const cls = p.maxRepeat === bestRepeat ? "cmp-best" : "cmp-worst";
+    html += '<td class="' + cls + '">' + p.maxRepeat +
+      ' <span class="hint-inline">上限 ' + state.rotation.cap + "</span></td>";
+  });
+  html += "</tr>";
+
+  html += "<tr><td>超上限搭档对</td>";
+  plans.forEach(p => {
+    html += "<td>" + (p.capHits.length
+      ? '<span class="cmp-worst">' + p.capHits.length + " 对</span>"
+      : '<span class="cmp-best">✓ 无</span>') + "</td>";
+  });
+  html += "</tr>";
+
+  for (let ri = 0; ri < R; ri++) {
+    html += "<tr><td>第 " + (ri + 1) + " 轮标签偏差</td>";
+    plans.forEach(p => {
+      const tags = state.rotation.balanceTags;
+      if (!tags.length) { html += "<td>—</td>"; return; }
+      html += "<td>" + tags.map(t => {
+        const td = p.tagDeviation[ri] && p.tagDeviation[ri].tags[t];
+        return esc(t) + ": " + (td ? td.counts.join("/") + "（偏差" + td.deviation + "）" : "—");
+      }).join("<br>") + "</td>";
+    });
+    html += "</tr>";
+  }
+
+  html += "<tr><td>操作</td>";
+  plans.forEach((p, i) => {
+    html += '<td><button class="btn" data-idx="' + i + '">在排演台打开</button></td>';
+  });
+  html += "</tr></tbody>";
+
+  const table = $("#rot-cmp-table");
+  table.innerHTML = html;
+  table.querySelectorAll("button[data-idx]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      state.planCur = i;
+      state.roundsWorking = cloneRounds(state.plans[i].rounds);
+      state.roundLocks = state.roundLocks.map(() => ({ members: new Set(), groups: new Set() }));
+      state.activeRound = 0;
+      state.historyRot = [];
+      renderRotWorkbench();
+      document.querySelector('.tab[data-tab="workbench"]').click();
+    });
+  });
+}
+
 /* ================= 初始化 ================= */
 renderRoster();
 renderSettings();
+ensureRotationRounds(3);
+renderRotRoundsTable();
+setMode("single");
 renderWorkbench();

@@ -9,10 +9,15 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-    background: #fff; color: #111; padding: 24px;
+    background: #e9edf2; color: #111; padding: 24px;
+  }
+  .page {
+    background: #fff; max-width: 1100px; margin: 0 auto 26px;
+    padding: 30px 34px; border-radius: 6px;
+    min-height: 70vh;
   }
   .head { display: flex; justify-content: space-between; align-items: baseline;
-          border-bottom: 3px solid #111; padding-bottom: 10px; margin-bottom: 20px; }
+          border-bottom: 3px solid #111; padding-bottom: 10px; margin-bottom: 22px; }
   h1 { font-size: 30px; letter-spacing: 2px; }
   .meta { color: #555; font-size: 14px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
@@ -23,14 +28,24 @@
   .members { display: flex; flex-wrap: wrap; gap: 8px; }
   .member { font-size: 20px; padding: 6px 14px; border: 1.5px solid #333;
             border-radius: 999px; background: #f6f6f6; }
-  .toolbar { position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px; }
-  .toolbar button, .toolbar a {
+  .toolbar {
+    position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px;
+    background: rgba(255,255,255,.92); padding: 8px; border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  }
+  .toolbar button, .toolbar a, .toolbar span.pageinfo {
     font-size: 14px; padding: 8px 14px; border: 1px solid #333; border-radius: 8px;
     background: #fff; cursor: pointer; text-decoration: none; color: #111;
   }
+  .toolbar span.pageinfo { border-color: #bbb; color: #555; cursor: default; }
   @media print {
+    body { background: #fff; padding: 0; }
     .toolbar { display: none; }
-    body { padding: 0; }
+    .page {
+      max-width: none; margin: 0; border-radius: 0; padding: 12mm 14mm;
+      min-height: 0; page-break-after: always; break-after: page;
+    }
+    .page:last-child { page-break-after: auto; break-after: auto; }
   }
   @media projection {
     .toolbar { display: none; }
@@ -38,34 +53,81 @@
 </style>
 </head>
 <body>
-  <div class="head">
-    <h1>{{ entry.title }}</h1>
-    <div class="meta">
-      共 {{ entry.groups|length }} 组 · {{ entry.students|length }} 人
-      · {{ "匿名编号" if anon else "实名" }}模式
-    </div>
-  </div>
-  <div class="grid">
-    {% for grp in entry.groups %}
-    <div class="group">
-      <h2>第 {{ loop.index }} 组 <span class="cnt">{{ grp|length }} 人</span></h2>
-      <div class="members">
-        {% for sid in grp %}
-        <span class="member">
-          {%- if anon -%}{{ labels.get(sid, "—") }}{%- else -%}{{ names.get(sid, "—") }}{%- endif -%}
-        </span>
-        {% endfor %}
+  {% for page in pages %}
+  <section class="page" data-page="{{ loop.index0 }}">
+    <div class="head">
+      <h1>
+        {%- if entry.get('mode') == 'rotation' -%}
+          {{ page.title }}
+        {%- else -%}
+          {{ entry.title }}
+        {%- endif -%}
+      </h1>
+      <div class="meta">
+        共 {{ page.groups|length }} 组 · {{ entry.students|length }} 人
+        · {{ "匿名编号" if anon else "实名" }}模式
+        {% if entry.get('mode') == 'rotation' %} · 第 {{ loop.index }} / {{ pages|length }} 轮{% endif %}
       </div>
     </div>
-    {% endfor %}
-  </div>
-  <div class="toolbar">
+    <div class="grid">
+      {% for grp in page.groups %}
+      <div class="group">
+        <h2>第 {{ loop.index }} 组 <span class="cnt">{{ grp|length }} 人</span></h2>
+        <div class="members">
+          {% for sid in grp %}
+          <span class="member">
+            {%- if anon -%}{{ labels.get(sid, "—") }}{%- else -%}{{ names.get(sid, "—") }}{%- endif -%}
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <div class="toolbar" id="toolbar">
     {% if anon %}
-    <a href="?">切换为实名</a>
+    <a href="?">实名</a>
     {% else %}
-    <a href="?anon=1">切换为匿名编号</a>
+    <a href="?anon=1">匿名编号</a>
+    {% endif %}
+    {% if pages|length > 1 %}
+    <button id="prev-page">‹ 上一轮</button>
+    <span class="pageinfo" id="page-info"></span>
+    <button id="next-page">下一轮 ›</button>
     {% endif %}
     <button onclick="window.print()">打 印</button>
   </div>
+
+  <script>
+    (function () {
+      var pages = Array.prototype.slice.call(document.querySelectorAll(".page"));
+      var info = document.getElementById("page-info");
+      if (pages.length <= 1) return;
+      var cur = 0;
+      function show(i) {
+        cur = Math.max(0, Math.min(pages.length - 1, i));
+        pages.forEach(function (p, k) {
+          p.style.display = (k === cur) ? "" : "none";
+        });
+        info.textContent = (cur + 1) + " / " + pages.length;
+        document.title = pages[cur].querySelector("h1").textContent + " · 分组结果";
+        window.scrollTo(0, 0);
+      }
+      document.getElementById("prev-page").addEventListener("click", function () { show(cur - 1); });
+      document.getElementById("next-page").addEventListener("click", function () { show(cur + 1); });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowLeft") show(cur - 1);
+        if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); show(cur + 1); }
+      });
+      // 打印时恢复显示全部页（@media print 负责分页）
+      window.addEventListener("beforeprint", function () {
+        pages.forEach(function (p) { p.style.display = ""; });
+      });
+      window.addEventListener("afterprint", function () { show(cur); });
+      show(0);
+    })();
+  </script>
 </body>
 </html>

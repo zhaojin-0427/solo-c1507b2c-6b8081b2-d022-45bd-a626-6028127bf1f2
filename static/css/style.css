@@ -239,3 +239,104 @@ textarea { width: 100%; margin: 8px 0; resize: vertical; }
   z-index: 99; max-width: 80vw;
 }
 .toast.err { background: var(--bad); }
+
+/* ---------- 模式切换 ---------- */
+.mode-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.mode-btn {
+  border: none; background: #fff; font: inherit; font-size: 14.5px;
+  padding: 9px 20px; cursor: pointer; color: var(--muted);
+}
+.mode-btn + .mode-btn { border-left: 1px solid var(--line); }
+.mode-btn.active { background: var(--primary); color: #fff; font-weight: 600; }
+
+/* ---------- 关系作用域 ---------- */
+.scope-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+             margin: 10px 0 4px; padding: 8px 10px; background: #f8fafc;
+             border-radius: 8px; font-size: 13.5px; }
+.scope-radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.scope-rounds { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.scope-chip {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 2px 10px; font-size: 12.5px; cursor: pointer; user-select: none;
+}
+.scope-chip.checked { background: #ecfeff; border-color: #0e7490; color: var(--must); font-weight: 600; }
+.rel-scope { font-size: 11.5px; border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+             background: #f1f5f9; color: var(--muted); cursor: pointer; }
+.rel-scope.all { background: #eef2ff; color: #3730a3; }
+.rel-scope.partial { background: #ecfeff; color: var(--must); }
+
+/* ---------- 多轮设置 ---------- */
+#rot-rounds-table { max-width: 560px; margin-bottom: 8px; }
+#rot-rounds-table input { width: 90px; padding: 5px 8px; }
+.cross-goals { margin: 6px 0 4px; }
+
+/* ---------- 轮次页签 ---------- */
+.round-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+.round-tab {
+  border: 1px solid var(--line); background: #fff; border-radius: 10px;
+  padding: 8px 16px; cursor: pointer; font: inherit; font-size: 14px;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 92px;
+}
+.round-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; box-shadow: var(--shadow); }
+.round-tab .rt-meta { font-size: 11px; color: var(--muted); font-weight: 400; }
+.round-tab.frozen::after { content: "🔒"; font-size: 11px; }
+
+/* ---------- 多轮换台 ---------- */
+.rot-actions-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 18px; }
+#rot-cross-summary { font-size: 13px; }
+#rot-cross-summary.ok { color: var(--ok); font-weight: 600; }
+#rot-cross-summary.bad { color: var(--bad); font-weight: 600; }
+
+/* ---------- 同伴矩阵 ---------- */
+.matrix-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--line); border-radius: 8px; }
+.matrix-table { border-collapse: collapse; font-size: 12px; }
+.matrix-table th, .matrix-table td {
+  border: 1px solid #e5e7eb; text-align: center; min-width: 30px; height: 28px; padding: 0;
+}
+.matrix-table thead th {
+  position: sticky; top: 0; background: #f8fafc; z-index: 2;
+  font-weight: 600; cursor: pointer; white-space: nowrap; padding: 2px 5px;
+}
+.matrix-table tbody th {
+  position: sticky; left: 0; background: #f8fafc; z-index: 1;
+  text-align: right; padding: 2px 7px; white-space: nowrap;
+}
+.matrix-table thead th.corner { left: 0; z-index: 3; cursor: default; }
+.m0 { background: #f8fafc; color: #9aa3af; }
+.m1 { background: #dbeafe; }
+.m2 { background: #93c5fd; }
+.m3 { background: #60a5fa; color: #fff; }
+.mcap { background: #fca5a5; color: #7f1d1d; font-weight: 700; }
+.mdiag { background: #e5e7eb; color: #9ca3af; }
+
+/* ---------- 弹窗 ---------- */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(17,24,39,.45);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.modal {
+  background: #fff; border-radius: 14px; padding: 22px 24px;
+  width: min(560px, 92vw); max-height: 84vh; overflow: auto;
+  box-shadow: 0 20px 50px rgba(0,0,0,.3);
+}
+.modal h2 { margin: 0 0 14px; font-size: 17px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.change-list { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow: auto; }
+.change-list li { padding: 5px 2px; border-bottom: 1px dashed var(--line); font-size: 13.5px; }
+.change-list li:last-child { border-bottom: none; }
+.change-list .up { color: var(--bad); }
+.change-list .down { color: var(--ok); }
+.affected-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.affected-chips .node { background: #eef2ff; color: #3730a3; border-radius: 999px;
+                        padding: 2px 10px; font-size: 12.5px; }
+
+/* ---------- 存档表格 ---------- */
+.mode-badge { font-size: 11.5px; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.mode-badge.single { background: #f1f5f9; color: var(--muted); }
+.mode-badge.rotation { background: #eef2ff; color: #3730a3; }
+
+/* ---------- 多轮冲突轮次标记 ---------- */
+.round-tag { display: inline-block; background: #fee2e2; color: var(--bad);
+             border-radius: 6px; padding: 1px 8px; font-size: 12px; margin-right: 6px; }
+.round-tag.cross { background: #ede9fe; color: #6d28d9; }

@@ -12,6 +12,7 @@ import uuid
 from flask import Flask, abort, jsonify, render_template, request
 
 import solver
+import rotation
 
 app = Flask(__name__)
 
@@ -54,6 +55,35 @@ def normalize_settings(raw, n_students):
     }
 
 
+def normalize_rotation(raw, n_students):
+    """清洗多轮轮换设置：2～8 轮，每轮独立组数与人数范围。"""
+    raw_rounds = raw.get("rounds") if isinstance(raw, dict) else None
+    n_rounds = _clamp(len(raw_rounds) if isinstance(raw_rounds, list) else 0,
+                      2, 8, 2)
+    rounds = []
+    for i in range(n_rounds):
+        rr = raw_rounds[i] if isinstance(raw_rounds[i], dict) else {}
+        ng = _clamp(rr.get("numGroups"), 1, 26, 3)
+        mn = _clamp(rr.get("minSize"), 0, 99, 3)
+        mx = _clamp(rr.get("maxSize"), 1, 99, max(6, mn))
+        if mx < mn:
+            mx = mn
+        rounds.append({"numGroups": ng, "minSize": mn, "maxSize": mx})
+    tags = []
+    for t in (raw.get("balanceTags", []) if isinstance(raw, dict) else []) or []:
+        t = str(t).strip()
+        if t and t not in tags:
+            tags.append(t)
+    return {
+        "rounds": rounds,
+        "balanceTags": tags[:12],
+        "cap": _clamp(raw.get("cap"), 1, n_rounds, n_rounds),
+        "maxCoverage": bool(raw.get("maxCoverage", True)),
+        "numPlans": _clamp(raw.get("numPlans"), 1, 6,
+                           _clamp(raw.get("numSolutions"), 1, 6, 3)),
+    }
+
+
 def normalize_students(raw):
     students = []
     seen = set()
@@ -72,13 +102,34 @@ def normalize_students(raw):
     return students
 
 
-def normalize_relations(raw, valid_ids):
+def normalize_relations(raw, valid_ids, n_rounds=1):
+    """清洗关系。scope: "all"（全程生效）或 {"rounds": [0 基轮次…]}。"""
     relations = []
+    seen = set()
     for r in raw or []:
         a, b = str(r.get("a", "")), str(r.get("b", ""))
         rtype = r.get("type")
         if rtype in ("must", "cannot") and a in valid_ids and b in valid_ids and a != b:
-            relations.append({"type": rtype, "a": a, "b": b})
+            key = (rtype, frozenset((a, b)))
+            if key in seen:
+                continue
+            seen.add(key)
+            scope = "all"
+            raw_scope = r.get("scope", "all")
+            if isinstance(raw_scope, dict):
+                rounds = []
+                for x in raw_scope.get("rounds", []) or []:
+                    try:
+                        x = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= x < n_rounds and x not in rounds:
+                        rounds.append(x)
+                if rounds:
+                    scope = {"rounds": sorted(rounds)}
+                else:
+                    scope = "all"
+            relations.append({"type": rtype, "a": a, "b": b, "scope": scope})
     return relations
 
 
@@ -114,8 +165,14 @@ def print_page(pid):
     # 匿名编号：按名单顺序编号（与排演台「编号」列一致），如 成员03
     labels = {s["id"]: "成员%02d" % (i + 1) for i, s in enumerate(entry["students"])}
     anon = request.args.get("anon") is not None
-    return render_template("print.html", entry=entry, names=names,
-                           labels=labels, anon=anon)
+    # 兼容旧格式（单轮、直接挂 groups）
+    pages = entry.get("pages")
+    if pages is None:
+        pages = [{"title": entry.get("title", "分组结果"),
+                  "groups": entry.get("groups", [])}]
+        entry = dict(entry, pages=pages, mode="single")
+    return render_template("print.html", entry=entry, pages=pages,
+                           names=names, labels=labels, anon=anon)
 
 
 # ---------------------------------------------------------------- 求解 API
@@ -156,6 +213,65 @@ def api_resolve():
     return jsonify({"conflicts": conflicts, "solution": solution})
 
 
+# ---------------------------------------------------------------- 多轮轮换 API
+
+@app.post("/api/rotation/generate")
+def api_rotation_generate():
+    data = request.get_json(force=True, silent=True) or {}
+    students = normalize_students(data.get("students"))
+    rot_raw = normalize_rotation(data.get("rotation") or {}, len(students))
+    relations = normalize_relations(data.get("relations"),
+                                    {s["id"] for s in students},
+                                    len(rot_raw["rounds"]))
+    if not students:
+        return jsonify({"conflicts": [{
+            "kind": "empty", "round": -1, "cross": False, "people": [], "chain": [],
+            "message": "请先录入学员。",
+        }], "plans": []})
+    conflicts, plans = rotation.generate_rotation(
+        students, relations, rot_raw, rot_raw["numPlans"])
+    return jsonify({"conflicts": conflicts, "plans": plans, "rotation": rot_raw})
+
+
+@app.post("/api/rotation/resolve")
+def api_rotation_resolve():
+    """从某轮起只重排后续轮次；之前的轮冻结，该轮的成员/整组锁保持。"""
+    data = request.get_json(force=True, silent=True) or {}
+    students = normalize_students(data.get("students"))
+    valid = {s["id"] for s in students}
+    rot_raw = normalize_rotation(data.get("rotation") or {}, len(students))
+    relations = normalize_relations(data.get("relations"), valid,
+                                    len(rot_raw["rounds"]))
+    raw_rounds = data.get("currentRounds") or []
+    current_rounds = []
+    for ri, rr in enumerate(rot_raw["rounds"]):
+        groups = raw_rounds[ri] if ri < len(raw_rounds) and isinstance(raw_rounds[ri], list) else []
+        groups = [[sid for sid in grp if sid in valid] for grp in groups]
+        while len(groups) < rr["numGroups"]:
+            groups.append([])
+        current_rounds.append(groups[:rr["numGroups"]])
+    from_round = _clamp(data.get("fromRound"), 0, len(rot_raw["rounds"]) - 1, 0)
+    locks_in = data.get("locks") or {}
+    locks_by_round = {}
+    for key, lk in locks_in.items():
+        try:
+            ri = int(key)
+        except (TypeError, ValueError):
+            continue
+        if ri < from_round or ri >= len(rot_raw["rounds"]):
+            continue
+        if not isinstance(lk, dict):
+            continue
+        locks_by_round[ri] = {
+            "members": [s for s in lk.get("members", []) if s in valid],
+            "groups": [g for g in lk.get("groups", [])
+                       if isinstance(g, int) and 0 <= g < len(current_rounds[ri])],
+        }
+    conflicts, payload = rotation.resolve_rotation(
+        students, relations, rot_raw, current_rounds, from_round, locks_by_round)
+    return jsonify({"conflicts": conflicts, "payload": payload})
+
+
 # ---------------------------------------------------------------- 存档 API
 
 def _save_path(sid):
@@ -179,6 +295,8 @@ def api_saves_list():
                 "createdAt": entry.get("createdAt"),
                 "studentCount": len(entry.get("students", [])),
                 "solutionCount": len(entry.get("solutions", [])),
+                "mode": entry.get("mode", "single"),
+                "roundCount": len((entry.get("rotation") or {}).get("rounds", [])),
             })
         except (OSError, ValueError):
             continue
@@ -191,18 +309,28 @@ def api_saves_create():
     data = request.get_json(force=True, silent=True) or {}
     students = normalize_students(data.get("students"))
     valid = {s["id"] for s in students}
+    mode = "rotation" if data.get("mode") == "rotation" else "single"
+    rot_raw = normalize_rotation(data.get("rotation") or {}, len(students)) \
+        if mode == "rotation" else None
+    n_rounds = len(rot_raw["rounds"]) if rot_raw else 1
     sid = uuid.uuid4().hex[:12]
     entry = {
         "id": sid,
         "name": str(data.get("name") or "未命名方案").strip()[:60] or "未命名方案",
         "createdAt": int(time.time()),
+        "mode": mode,
         "students": students,
-        "relations": normalize_relations(data.get("relations"), valid),
+        "relations": normalize_relations(data.get("relations"), valid, n_rounds),
         "settings": normalize_settings(data.get("settings") or {}, len(students)),
         "solutions": data.get("solutions") or [],
         "working": data.get("working"),
         "locks": data.get("locks") or {"members": [], "groups": []},
     }
+    if mode == "rotation":
+        entry["rotation"] = rot_raw
+        entry["plans"] = data.get("plans") or []
+        entry["roundsWorking"] = data.get("roundsWorking")
+        entry["roundLocks"] = data.get("roundLocks") or {}
     with open(_save_path(sid), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=1)
     return jsonify({"id": sid, "name": entry["name"]})
@@ -232,15 +360,27 @@ def api_prints_create():
     data = request.get_json(force=True, silent=True) or {}
     students = normalize_students(data.get("students"))
     valid = {s["id"] for s in students}
-    groups = [[sid for sid in grp if sid in valid] for grp in (data.get("groups") or [])]
     pid = uuid.uuid4().hex[:12]
     entry = {
         "id": pid,
         "title": str(data.get("title") or "分组结果").strip()[:60] or "分组结果",
         "createdAt": int(time.time()),
         "students": students,          # 顺序即匿名编号顺序
-        "groups": groups,
     }
+    if data.get("mode") == "rotation":
+        pages = []
+        round_names = data.get("roundNames") or []
+        for i, grps in enumerate(data.get("rounds") or []):
+            groups = [[sid for sid in grp if sid in valid] for grp in grps]
+            title = round_names[i] if i < len(round_names) and round_names[i] \
+                else ("第 %d 轮" % (i + 1))
+            pages.append({"title": title, "groups": groups})
+        entry["mode"] = "rotation"
+        entry["pages"] = pages
+    else:
+        groups = [[sid for sid in grp if sid in valid] for grp in (data.get("groups") or [])]
+        entry["mode"] = "single"
+        entry["pages"] = [{"title": entry["title"], "groups": groups}]
     with open(os.path.join(PRINTS_DIR, pid + ".json"), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=1)
     return jsonify({"id": pid})

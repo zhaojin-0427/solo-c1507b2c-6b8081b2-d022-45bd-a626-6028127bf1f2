@@ -58,6 +58,12 @@
           <select id="rel-b"></select>
           <button class="btn primary" id="btn-add-relation">添加</button>
         </div>
+        <div class="scope-row" id="rel-scope-row">
+          <label class="scope-radio"><input type="radio" name="rel-scope" value="all" checked> 全程生效</label>
+          <label class="scope-radio"><input type="radio" name="rel-scope" value="rounds"> 只作用于指定轮次</label>
+          <span class="scope-rounds hidden" id="rel-scope-pickers"></span>
+        </div>
+        <p class="hint" id="rel-scope-hint">单轮模式下所有关系均作用于唯一一轮。</p>
         <ul class="relation-list" id="relation-list"></ul>
       </div>
     </div>
@@ -73,6 +79,14 @@
   <!-- ============ 分组设置 ============ -->
   <section id="tab-settings" class="tabpane">
     <div class="card">
+      <div class="mode-switch" id="mode-switch">
+        <button class="mode-btn active" data-mode="single">单轮分组</button>
+        <button class="mode-btn" data-mode="rotation">多轮轮换（2～8 轮）</button>
+      </div>
+    </div>
+
+    <!-- 单轮设置 -->
+    <div class="card" id="single-settings">
       <h2>分组参数</h2>
       <div class="settings-grid">
         <label>组数
@@ -92,6 +106,37 @@
       <div class="tag-options" id="tag-options"></div>
       <button class="btn primary big" id="btn-generate">生成方案</button>
     </div>
+
+    <!-- 多轮轮换设置 -->
+    <div class="card hidden" id="rotation-settings">
+      <h2>多轮轮换参数</h2>
+      <div class="settings-grid">
+        <label>活动轮数（2～8）
+          <input id="rot-rounds" type="number" min="2" max="8" value="3">
+        </label>
+        <label>同组次数上限（任意两人最多同组几轮）
+          <input id="rot-cap" type="number" min="1" max="8" value="2">
+        </label>
+        <label>生成方案数
+          <input id="rot-plans" type="number" min="1" max="6" value="3">
+        </label>
+      </div>
+      <h3>每轮设置</h3>
+      <table class="table" id="rot-rounds-table">
+        <thead><tr><th>轮次</th><th>组数</th><th>每组最少</th><th>每组最多</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <h3>跨轮目标</h3>
+      <div class="cross-goals">
+        <label class="tag-option checked"><input type="checkbox" id="rot-max-coverage" checked>
+          尽量让每人接触更多不同同伴（同伴覆盖率最大化）</label>
+        <p class="hint">始终控制：任意两人同组次数不超过上方上限。</p>
+      </div>
+      <h3>技能标签跨轮均衡 <span class="hint-inline">（选中的标签在各轮各组都尽量均匀）</span></h3>
+      <div class="tag-options" id="rot-tag-options"></div>
+      <button class="btn primary big" id="btn-rot-generate">一次生成完整轮换方案</button>
+    </div>
+
     <div class="card hidden" id="conflict-card">
       <h2 class="conflict-title">⚠ 发现硬约束冲突，无法生成方案</h2>
       <div id="conflict-list"></div>
@@ -100,6 +145,7 @@
 
   <!-- ============ 排演台 ============ -->
   <section id="tab-workbench" class="tabpane">
+    <!-- 单轮排演台 -->
     <div class="empty-tip" id="wb-empty">尚未生成方案，请先到「② 分组设置」中生成。</div>
     <div id="wb-main" class="hidden">
       <div class="wb-toolbar">
@@ -131,6 +177,49 @@
         </div>
       </div>
     </div>
+
+    <!-- 多轮换台 -->
+    <div class="empty-tip hidden" id="rot-empty">尚未生成轮换方案，请先到「② 分组设置」中选择「多轮轮换」并生成。</div>
+    <div id="rot-main" class="hidden">
+      <div class="wb-toolbar">
+        <div class="sol-tabs" id="rot-plan-tabs"></div>
+        <div class="wb-actions">
+          <button class="btn" id="btn-rot-undo" title="撤销上一步操作">↩ 撤销</button>
+          <button class="btn ghost" id="btn-rot-clear-locks">清除本轮锁定</button>
+          <button class="btn" id="btn-rot-print">🖨 按轮投影 / 打印</button>
+        </div>
+      </div>
+      <div class="round-tabs" id="round-tabs"></div>
+      <div class="wb-status">
+        <span id="rot-lock-summary" class="hint-inline"></span>
+        <span id="rot-violation-summary"></span>
+        <span id="rot-cross-summary"></span>
+      </div>
+      <div class="card hidden" id="rot-conflict-card">
+        <h2 class="conflict-title">⚠ 无法完成重排</h2>
+        <div id="rot-conflict-list"></div>
+      </div>
+      <div class="groups-grid" id="rot-groups-grid"></div>
+      <div class="rot-actions-bar">
+        <button class="btn primary" id="btn-rot-resolve">⚙ 锁定此前各轮，从第 <span id="rot-resolve-label">本轮</span> 起重排后续</button>
+        <span class="hint-inline">拖动调整本轮后点击，系统只重排本轮及之后各轮，之前轮次保持不动。</span>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <h3>本轮编排检查</h3>
+          <ul id="rot-violation-list" class="violation-list"></ul>
+        </div>
+        <div class="card">
+          <h3>跨轮指标（当前轮换）</h3>
+          <ul id="rot-metrics-list" class="violation-list"></ul>
+        </div>
+      </div>
+      <div class="card">
+        <h3>同伴矩阵 <span class="hint-inline">（数字 = 同组轮数；0 为未曾同组；点击表头按该学员排序）</span></h3>
+        <div class="matrix-wrap"><table class="matrix-table" id="rot-matrix"></table></div>
+        <p class="hint" id="rot-matrix-legend"></p>
+      </div>
+    </div>
   </section>
 
   <!-- ============ 方案对比 ============ -->
@@ -140,6 +229,13 @@
       <div class="card">
         <h2>方案对比</h2>
         <div class="cmp-scroll"><table class="table cmp-table" id="cmp-table"></table></div>
+      </div>
+    </div>
+    <div class="empty-tip hidden" id="rot-cmp-empty">尚未生成轮换方案。</div>
+    <div id="rot-cmp-main" class="hidden">
+      <div class="card">
+        <h2>轮换方案对比</h2>
+        <div class="cmp-scroll"><table class="table cmp-table" id="rot-cmp-table"></table></div>
       </div>
     </div>
   </section>
@@ -152,17 +248,29 @@
         <input id="save-name" type="text" placeholder="方案名称，如：周五下午场" maxlength="60">
         <button class="btn primary" id="btn-save">保存到本地</button>
       </div>
-      <p class="hint">保存内容：学员名单、关系、分组设置、全部生成方案与当前编排。文件保存在本机 data/saves/ 目录。</p>
+      <p class="hint">保存内容：学员名单、关系（含生效轮次）、分组设置、全部生成方案与当前编排；多轮轮换模式下一并保存各轮设置、轮换方案与各轮调整。文件保存在本机 data/saves/ 目录。</p>
     </div>
     <div class="card">
       <h2>已保存的方案</h2>
       <table class="table" id="saves-table">
-        <thead><tr><th>名称</th><th>保存时间</th><th>学员数</th><th>方案数</th><th></th></tr></thead>
+        <thead><tr><th>名称</th><th>模式</th><th>保存时间</th><th>学员数</th><th>方案数</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
   </section>
 </main>
+
+<!-- 重排影响预览弹窗 -->
+<div id="resolve-modal" class="modal-mask hidden">
+  <div class="modal">
+    <h2>重排影响预览</h2>
+    <div id="resolve-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn" id="resolve-cancel">取消</button>
+      <button class="btn primary" id="resolve-apply">应用重排</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast hidden"></div>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

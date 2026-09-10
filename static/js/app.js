@@ -268,33 +268,43 @@ $("#btn-generate").addEventListener("click", async () => {
   }
 });
 
+function buildConflictItem(c) {
+  const div = document.createElement("div");
+  div.className = "conflict-item";
+  let html = "<p>" + esc(c.message) + "</p>";
+  if (c.chain && c.chain.length) {
+    // 冲突链路：A —必须→ B —不可→ C
+    html += '<div class="chain">';
+    const first = c.chain[0];
+    html += '<span class="node">' + esc(nameOf(first.a)) + "</span>";
+    for (const link of c.chain) {
+      const label = link.type === "must" ? "必须同组" : "✕ 不可同组";
+      html += '<span class="link ' + link.type + '">' + label + "</span>";
+      html += '<span class="node">' + esc(nameOf(link.b)) + "</span>";
+    }
+    html += "</div>";
+  } else if (c.people && c.people.length) {
+    html += '<div class="people-chips">' +
+      c.people.map(p => '<span class="node">' + esc(nameOf(p)) + "</span>").join("") + "</div>";
+  }
+  div.innerHTML = html;
+  return div;
+}
+
 function renderConflicts(conflicts) {
   const card = $("#conflict-card");
   card.classList.remove("hidden");
   const box = $("#conflict-list");
   box.innerHTML = "";
-  for (const c of conflicts) {
-    const div = document.createElement("div");
-    div.className = "conflict-item";
-    let html = "<p>" + esc(c.message) + "</p>";
-    if (c.chain && c.chain.length) {
-      // 冲突链路：A —必须→ B —不可→ C
-      html += '<div class="chain">';
-      const first = c.chain[0];
-      html += '<span class="node">' + esc(nameOf(first.a)) + "</span>";
-      for (const link of c.chain) {
-        const label = link.type === "must" ? "必须同组" : "✕ 不可同组";
-        html += '<span class="link ' + link.type + '">' + label + "</span>";
-        html += '<span class="node">' + esc(nameOf(link.b)) + "</span>";
-      }
-      html += "</div>";
-    } else if (c.people && c.people.length) {
-      html += '<div class="people-chips">' +
-        c.people.map(p => '<span class="node">' + esc(nameOf(p)) + "</span>").join("") + "</div>";
-    }
-    div.innerHTML = html;
-    box.appendChild(div);
-  }
+  for (const c of conflicts) box.appendChild(buildConflictItem(c));
+}
+
+function renderWbConflicts(conflicts) {
+  const card = $("#wb-conflict-card");
+  card.classList.remove("hidden");
+  const box = $("#wb-conflict-list");
+  box.innerHTML = "";
+  for (const c of conflicts) box.appendChild(buildConflictItem(c));
 }
 
 function resetSolutions() {
@@ -351,9 +361,11 @@ $("#btn-resolve").addEventListener("click", async () => {
       locks: { members: [...state.locks.members], groups: [...state.locks.groups] },
     });
     if (data.conflicts && data.conflicts.length) {
+      renderWbConflicts(data.conflicts);
       toast(data.conflicts[0].message, true);
       return;
     }
+    $("#wb-conflict-card").classList.add("hidden");
     pushHistory();
     state.working = cloneGroups(data.solution.groups);
     renderWorkbench();
@@ -433,6 +445,7 @@ function renderWorkbench() {
   const has = !!state.working;
   $("#wb-empty").classList.toggle("hidden", has);
   $("#wb-main").classList.toggle("hidden", !has);
+  $("#wb-conflict-card").classList.add("hidden");  // 编排/锁定已变化，旧的冲突报告失效
   if (!has) return;
 
   // 方案页签

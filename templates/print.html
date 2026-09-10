@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ entry.title }} · 分组结果</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    background: #fff; color: #111; padding: 24px;
+  }
+  .head { display: flex; justify-content: space-between; align-items: baseline;
+          border-bottom: 3px solid #111; padding-bottom: 10px; margin-bottom: 20px; }
+  h1 { font-size: 30px; letter-spacing: 2px; }
+  .meta { color: #555; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .group { border: 2px solid #111; border-radius: 10px; padding: 14px 16px;
+           break-inside: avoid; page-break-inside: avoid; }
+  .group h2 { font-size: 22px; margin-bottom: 10px; display: flex; justify-content: space-between; }
+  .group h2 .cnt { font-size: 14px; color: #555; align-self: center; }
+  .members { display: flex; flex-wrap: wrap; gap: 8px; }
+  .member { font-size: 20px; padding: 6px 14px; border: 1.5px solid #333;
+            border-radius: 999px; background: #f6f6f6; }
+  .toolbar { position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px; }
+  .toolbar button, .toolbar a {
+    font-size: 14px; padding: 8px 14px; border: 1px solid #333; border-radius: 8px;
+    background: #fff; cursor: pointer; text-decoration: none; color: #111;
+  }
+  @media print {
+    .toolbar { display: none; }
+    body { padding: 0; }
+  }
+  @media projection {
+    .toolbar { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>{{ entry.title }}</h1>
+    <div class="meta">
+      共 {{ entry.groups|length }} 组 · {{ entry.students|length }} 人
+      · {{ "匿名编号" if anon else "实名" }}模式
+    </div>
+  </div>
+  <div class="grid">
+    {% for grp in entry.groups %}
+    <div class="group">
+      <h2>第 {{ loop.index }} 组 <span class="cnt">{{ grp|length }} 人</span></h2>
+      <div class="members">
+        {% for sid in grp %}
+        <span class="member">
+          {%- if anon -%}{{ labels.get(sid, "—") }}{%- else -%}{{ names.get(sid, "—") }}{%- endif -%}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="toolbar">
+    {% if anon %}
+    <a href="?">切换为实名</a>
+    {% else %}
+    <a href="?anon=1">切换为匿名编号</a>
+    {% endif %}
+    <button onclick="window.print()">打 印</button>
+  </div>
+</body>
+</html>

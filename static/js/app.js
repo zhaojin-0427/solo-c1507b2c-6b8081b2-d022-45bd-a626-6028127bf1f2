@@ -1597,9 +1597,19 @@ function showResolvePreview(payload) {
   const names = (id) => nameOf(id);
   const changes = payload.repeatChanges;
   const fmt = (x) => "「" + esc(names(x.a)) + "–" + esc(names(x.b)) + "」 " + x.before + "→" + x.after;
+  const totalRounds = state.rotation.rounds.length;
+  let rangeText;
+  if (payload.fromRound <= 0) {
+    // 没有前置冻结轮：直接重排全部轮次
+    rangeText = totalRounds === 1
+      ? "将重排 <b>第 1 轮</b>。"
+      : "无前置锁定轮，将重排 <b>第 1～" + totalRounds + " 轮</b>。";
+  } else {
+    rangeText = "将保持 <b>第 1～" + payload.fromRound + " 轮</b>不变，重排 <b>第 " +
+      (payload.fromRound + 1) + "～" + totalRounds + " 轮</b>。";
+  }
   let html =
-    '<p>将保持 <b>第 1～' + payload.fromRound + ' 轮</b>不变，重排 <b>第 ' +
-    (payload.fromRound + 1) + "～" + state.rotation.rounds.length + ' 轮</b>。</p>' +
+    "<p>" + rangeText + "</p>" +
     '<p><b>受影响学员：' + payload.affectedCount + ' 人</b></p>';
   if (payload.affected.length) {
     html += '<div class="affected-chips">' +

@@ -303,6 +303,54 @@ class RotationGenerationTest(unittest.TestCase):
         self.assertIn("rotation_cap_capacity",
                       [c["kind"] for c in data["conflicts"]])
 
+    def test_cap2_large_and_whole_group_round_feasible(self):
+        """下界不是同组次数：21 人，3×7 与 1×21 两轮，cap=2 必须正常求解。
+
+        回归：鸽笼判定把 ceil(min_j / g_i) 当成一对学员的跨轮同组次数，
+        在 cap>=2 时误报 rotation_cap_capacity。
+        """
+        students = [{"id": "s%02d" % i, "name": "学员%02d" % i, "tags": []}
+                    for i in range(21)]
+        rotation = {
+            "rounds": [
+                {"numGroups": 3, "minSize": 7, "maxSize": 7},
+                {"numGroups": 1, "minSize": 21, "maxSize": 21},
+            ],
+            "balanceTags": [], "cap": 2, "numPlans": 2,
+        }
+        res = self.client.post("/api/rotation/generate", json={
+            "students": students, "relations": [], "rotation": rotation})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["conflicts"], [])
+        self.assertTrue(data["plans"])
+        for plan in data["plans"]:
+            self.assertEqual([len(g) for g in plan["rounds"][0]], [7, 7, 7])
+            self.assertEqual([len(g) for g in plan["rounds"][1]], [21])
+            self.assertLessEqual(plan["maxRepeat"], 2)
+            self.assertEqual(plan["capHits"], [])
+            for groups in plan["rounds"]:
+                flat = sorted(s for g in groups for s in g)
+                self.assertEqual(flat, [s["id"] for s in students])
+
+    def test_cap1_whole_group_round_still_conflicts(self):
+        """同一 21 人配置 cap=1 时确实无解（一对在两轮都同组，重复 2 次）。"""
+        students = [{"id": "s%02d" % i, "name": "学员%02d" % i, "tags": []}
+                    for i in range(21)]
+        rotation = {
+            "rounds": [
+                {"numGroups": 3, "minSize": 7, "maxSize": 7},
+                {"numGroups": 1, "minSize": 21, "maxSize": 21},
+            ],
+            "balanceTags": [], "cap": 1, "numPlans": 2,
+        }
+        res = self.client.post("/api/rotation/generate", json={
+            "students": students, "relations": [], "rotation": rotation})
+        data = res.get_json()
+        self.assertEqual(data["plans"], [])
+        self.assertIn("rotation_cap_capacity",
+                      [c["kind"] for c in data["conflicts"]])
+
     def test_forced_must_conflict_cross_flag(self):
         """全程必须同组（2 轮）与 cap=1 冲突，标记为跨轮冲突。"""
         rotation = {
@@ -412,6 +460,25 @@ class RotationResolveTest(unittest.TestCase):
             "rotation": self.rotation, "currentRounds": [],
             "fromRound": 0, "locks": {}})
         self.assertEqual(res.status_code, 200)
+
+    def test_resolve_from_first_round_preview_fields(self):
+        """从第 1 轮（fromRound=0）重排：无冻结轮，预览依据字段正确。
+
+        前端文案据此显示“将重排第 1～N 轮”，而不是“保持第 1～0 轮不变”。
+        """
+        data = self.resolve(0, {})
+        self.assertEqual(data["conflicts"], [])
+        payload = data["payload"]
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["fromRound"], 0)
+        self.assertEqual(len(payload["rounds"]), 3)
+        self.assertIn("affectedCount", payload)
+        self.assertIn("repeatChanges", payload)
+        for ri, groups in enumerate(payload["rounds"]):
+            rc = self.rotation["rounds"][ri]
+            for grp in groups:
+                self.assertTrue(rc["minSize"] <= len(grp) <= rc["maxSize"])
+        self.assertLessEqual(payload["metrics"]["maxRepeat"], 2)
 
 
 class RotationSaveAndPrintTest(unittest.TestCase):

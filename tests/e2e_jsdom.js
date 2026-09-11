@@ -334,6 +334,11 @@ async function scenarioD() {
   const modalText = $("#resolve-modal-body").textContent;
   check("D16 预览含受影响人数", modalText.includes("受影响学员"));
   check("D17 预览含重复搭档变化", modalText.includes("重复搭档变化"));
+  // 第 1 轮发起（fromRound=0）：不得出现“第 1～0 轮不变”，应说明重排第 1～2 轮
+  check("D17b 第1轮发起不显示 1～0 轮不变", !modalText.includes("1～0"), modalText.slice(0, 80));
+  check("D17c 第1轮发起说明重排第1～2轮",
+    modalText.includes("无前置锁定轮") && modalText.includes("第 1～2 轮"),
+    modalText.slice(0, 80));
   // 应用
   $("#resolve-apply").click();
   await sleep(50);
@@ -367,6 +372,53 @@ async function scenarioD() {
   }
 }
 
+/* ---------------- 场景E：从第 2 轮发起重排的预览文案 ---------------- */
+async function setupRotationPage2(window, $, $$, rounds) {
+  $("#bulk-text").value =
+    "甲 前端\n乙 后端\n丙 设计\n丁 前端\n戊 后端\n己 运维\n庚 测试\n辛 设计\n壬 前端\n癸 后端";
+  $("#btn-bulk-import").click();
+  $$("#mode-switch .mode-btn").find((b) => b.dataset.mode === "rotation").click();
+  $("#rot-rounds").value = "2";
+  $("#rot-rounds").dispatchEvent(new window.Event("change"));
+  $("#rot-cap").value = "2";
+  $("#rot-cap").dispatchEvent(new window.Event("change"));
+  const inputs = $$("#rot-rounds-table tbody input");
+  const row = (r, ng, mn, mx) =>
+    [0, 1, 2].forEach((k) => {
+      inputs[r * 3 + k].value = [ng, mn, mx][k];
+      inputs[r * 3 + k].dispatchEvent(new window.Event("change"));
+    });
+  row(0, rounds[0][0], rounds[0][1], rounds[0][2]);
+  row(1, rounds[1][0], rounds[1][1], rounds[1][2]);
+  $("#btn-rot-generate").click();
+}
+
+async function scenarioE() {
+  console.log("场景E：从第 2 轮发起重排，预览应说明保持第1轮不变");
+  const window = await newPage();
+  const $ = (s) => window.document.querySelector(s);
+  const $$ = (s) => Array.from(window.document.querySelectorAll(s));
+  await setupRotationPage2(window, $, $$, [[3, 3, 4], [3, 3, 4]]);
+  await sleep(1500);
+  check("E1 轮换台已就绪", !$("#rot-main").classList.contains("hidden"));
+
+  // 切到第 2 轮（round-tab idx=1），再发起重排
+  $$("#round-tabs .round-tab")[1].click();
+  await sleep(40);
+  $("#btn-rot-resolve").click();
+  await sleep(1500);
+  check("E2 弹出重排影响预览", !$("#resolve-modal").classList.contains("hidden"),
+    $("#rot-conflict-card").textContent.slice(0, 80));
+  const text = $("#resolve-modal-body").textContent;
+  check("E3 预览说明保持第 1 轮不变", text.includes("保持") && text.includes("第 1～1 轮"),
+    text.slice(0, 90));
+  check("E4 预览说明重排第 2～2 轮", text.includes("第 2～2 轮"), text.slice(0, 90));
+  check("E5 不出现 1～0 轮不变", !text.includes("1～0"));
+  $("#resolve-cancel").click();
+  await sleep(20);
+  check("E6 取消后弹窗关闭", $("#resolve-modal").classList.contains("hidden"));
+}
+
 (async () => {
   // 确认服务可达
   try {
@@ -380,6 +432,7 @@ async function scenarioD() {
   await scenarioB();
   await scenarioC();
   await scenarioD();
+  await scenarioE();
   const passed = results.filter(([, ok]) => ok).length;
   console.log("\nE2E 回归：" + passed + "/" + results.length + " 通过");
   process.exit(process.exitCode || 0);

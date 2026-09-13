@@ -1,0 +1,118 @@
+{
+ "id": "fd70c8c4de90",
+ "title": "多轮轮换分组",
+ "createdAt": 1789070660,
+ "students": [
+  {
+   "id": "s1_rqz9g",
+   "name": "甲",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s2_fa4i0",
+   "name": "乙",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s3_7p7ix",
+   "name": "丙",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s4_95dov",
+   "name": "丁",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s5_yo5xd",
+   "name": "戊",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s6_lamp8",
+   "name": "己",
+   "tags": [
+    "运维"
+   ]
+  },
+  {
+   "id": "s7_lg2mc",
+   "name": "庚",
+   "tags": [
+    "测试"
+   ]
+  },
+  {
+   "id": "s8_qzqr5",
+   "name": "辛",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s9_ka9ye",
+   "name": "壬",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s10_ro2ly",
+   "name": "癸",
+   "tags": [
+    "后端"
+   ]
+  }
+ ],
+ "mode": "rotation",
+ "pages": [
+  {
+   "title": "第 1 轮分组",
+   "groups": [
+    [
+     "s5_yo5xd",
+     "s7_lg2mc",
+     "s8_qzqr5",
+     "s9_ka9ye"
+    ],
+    [
+     "s10_ro2ly",
+     "s1_rqz9g",
+     "s2_fa4i0",
+     "s4_95dov",
+     "s6_lamp8",
+     "s3_7p7ix"
+    ]
+   ]
+  },
+  {
+   "title": "第 2 轮分组",
+   "groups": [
+    [
+     "s10_ro2ly",
+     "s1_rqz9g",
+     "s2_fa4i0",
+     "s4_95dov",
+     "s6_lamp8"
+    ],
+    [
+     "s3_7p7ix",
+     "s5_yo5xd",
+     "s7_lg2mc",
+     "s8_qzqr5",
+     "s9_ka9ye"
+    ]
+   ]
+  }
+ ]
+}

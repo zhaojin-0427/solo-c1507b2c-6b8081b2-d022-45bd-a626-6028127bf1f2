@@ -19,8 +19,9 @@
     <button class="tab active" data-tab="roster">① 学员与关系</button>
     <button class="tab" data-tab="settings">② 分组设置</button>
     <button class="tab" data-tab="workbench">③ 排演台</button>
-    <button class="tab" data-tab="compare">④ 方案对比</button>
-    <button class="tab" data-tab="saves">⑤ 存档</button>
+    <button class="tab" data-tab="roles">④ 角色轮值</button>
+    <button class="tab" data-tab="compare">⑤ 方案对比</button>
+    <button class="tab" data-tab="saves">⑥ 存档</button>
   </nav>
 </header>
 
@@ -222,6 +223,94 @@
     </div>
   </section>
 
+  <!-- ============ 角色轮值 ============ -->
+  <section id="tab-roles" class="tabpane">
+    <div class="card" id="role-tpl-card">
+      <h2>角色模板</h2>
+      <div class="form-row">
+        <input id="role-name" type="text" placeholder="角色名称，如：主持 / 记录 / 计时 / 汇报" maxlength="12">
+        <label class="hint-inline">每组名额
+          <input id="role-per" type="number" min="1" max="5" value="1" style="width:64px">
+        </label>
+        <button class="btn primary" id="btn-add-role">添加角色</button>
+      </div>
+      <table class="table" id="role-tpl-table">
+        <thead><tr><th>角色</th><th>每组名额</th><th>所需技能标签</th><th>个人禁任</th><th>连续/累计上限</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <datalist id="role-tag-list"></datalist>
+      <h3>不可兼任规则 <span class="hint-inline">（同一人同一轮不得同时担任的角色）</span></h3>
+      <div class="scope-row">
+        <label class="scope-radio"><input type="radio" name="role-nc" value="all" checked> 任意两角色均不可同轮兼任</label>
+        <label class="scope-radio"><input type="radio" name="role-nc" value="pairs"> 仅指定角色对</label>
+      </div>
+      <div id="role-nc-pairs" class="hidden">
+        <div class="form-row">
+          <select id="role-nc-a"></select>
+          <select id="role-nc-b"></select>
+          <button class="btn" id="btn-add-nc">添加角色对</button>
+        </div>
+        <ul class="relation-list" id="role-nc-list"></ul>
+      </div>
+      <p class="hint">模板改动会即时作用于草稿检查；已确认版本保存当时的模板副本，不受影响。</p>
+    </div>
+
+    <div class="card" id="role-draft-card">
+      <h2>轮值草稿</h2>
+      <div class="row-gap" style="margin-top:0">
+        <button class="btn primary" id="btn-role-draft">从当前分组建立草稿</button>
+        <span class="hint-inline">来源：排演台当前编排（单轮为 1 轮，多轮轮换为全部轮次）。来源变化只会把草稿标为过期，不会改写。</span>
+      </div>
+      <div id="role-stale" class="stale-banner hidden">
+        <span>⚠ 来源分组已变化，本草稿已过期（已确认版本不受影响）。</span>
+        <button class="btn" id="btn-role-redraft">按当前分组重建草稿</button>
+      </div>
+      <div class="empty-tip" id="role-empty">尚未建立轮值草稿。请先在「角色模板」中定义角色，再到「③ 排演台」生成分组，最后回到这里点「从当前分组建立草稿」。</div>
+      <div id="role-draft-main" class="hidden">
+        <div class="wb-toolbar">
+          <div class="round-tabs" id="role-round-tabs"></div>
+          <div class="wb-actions">
+            <button class="btn" id="btn-role-undo" title="撤销上一步操作">↩ 撤销</button>
+            <button class="btn" id="btn-role-fill" title="保持锁定不动，由系统补齐空缺槽位">⚙ 补齐空缺</button>
+            <button class="btn ghost" id="btn-role-clear">清除未锁定</button>
+            <button class="btn primary" id="btn-role-confirm">✔ 确认版本</button>
+          </div>
+        </div>
+        <div class="wb-status">
+          <span id="role-lock-summary" class="hint-inline"></span>
+          <span id="role-violation-summary"></span>
+        </div>
+        <div class="card hidden" id="role-conflict-card">
+          <h2 class="conflict-title">⚠ 无法补齐空缺</h2>
+          <div id="role-conflict-list"></div>
+        </div>
+        <div class="groups-grid" id="role-groups-grid"></div>
+        <div class="card">
+          <h3>编排检查 <span class="hint-inline">（点选条目可定位成员与轮次）</span></h3>
+          <ul id="role-violation-list" class="violation-list"></ul>
+        </div>
+        <div class="card">
+          <h3>成员 × 轮次矩阵 <span class="hint-inline">（单元格为该轮担任的角色；红底 = 同轮兼任冲突）</span></h3>
+          <div class="matrix-wrap"><table class="matrix-table" id="role-matrix"></table></div>
+          <p class="hint" id="role-matrix-legend"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="role-versions-card">
+      <h2>已确认版本</h2>
+      <table class="table" id="role-versions-table">
+        <thead><tr><th>版本</th><th>确认时间</th><th>轮次</th><th>来源</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="role-version-view" class="hidden">
+        <h3 id="role-version-title"></h3>
+        <div class="round-tabs" id="role-version-rounds"></div>
+        <div class="groups-grid" id="role-version-grid"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ 方案对比 ============ -->
   <section id="tab-compare" class="tabpane">
     <div class="empty-tip" id="cmp-empty">尚未生成方案。</div>
@@ -268,6 +357,17 @@
     <div class="modal-actions">
       <button class="btn" id="resolve-cancel">取消</button>
       <button class="btn primary" id="resolve-apply">应用重排</button>
+    </div>
+  </div>
+</div>
+
+<!-- 角色补齐候选对比弹窗 -->
+<div id="role-cand-modal" class="modal-mask hidden">
+  <div class="modal">
+    <h2>补齐候选对比</h2>
+    <div id="role-cand-body"></div>
+    <div class="modal-actions">
+      <button class="btn" id="role-cand-cancel">取消</button>
     </div>
   </div>
 </div>

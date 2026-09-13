@@ -13,6 +13,7 @@ from flask import Flask, abort, jsonify, render_template, request
 
 import solver
 import rotation
+import rolesolver
 
 app = Flask(__name__)
 
@@ -144,6 +145,170 @@ def _read_payload():
 
 def _safe_id(name):
     return re.sub(r"[^0-9A-Za-z_-]", "", name or "")
+
+
+# ---------------------------------------------------------------- 角色轮值清洗
+
+def normalize_role_template(raw, valid_ids):
+    """清洗角色模板：角色（每组名额/所需标签/禁任）、不可兼任规则、连续累计上限。"""
+    raw = raw if isinstance(raw, dict) else {}
+    roles = []
+    seen_ids = set()
+    for r in (raw.get("roles") or [])[:12]:
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("name") or "").strip()[:12]
+        if not name:
+            continue
+        rid = str(r.get("id") or "").strip()[:40] or ("role%d" % len(roles))
+        if rid in seen_ids:
+            continue
+        seen_ids.add(rid)
+        tags = []
+        for t in r.get("tags") or []:
+            t = str(t).strip()[:20]
+            if t and t not in tags:
+                tags.append(t)
+        ban = []
+        for m in r.get("ban") or []:
+            m = str(m)
+            if m in valid_ids and m not in ban:
+                ban.append(m)
+        roles.append({
+            "id": rid, "name": name,
+            "perGroup": _clamp(r.get("perGroup"), 1, 5, 1),
+            "tags": tags[:8], "ban": ban[:60],
+        })
+    role_ids = {r["id"] for r in roles}
+    nc_mode = "pairs" if raw.get("ncMode") == "pairs" else "all"
+    nc_pairs = []
+    seen_p = set()
+    for p in (raw.get("ncPairs") or [])[:66]:
+        if isinstance(p, (list, tuple)) and len(p) == 2:
+            a, b = str(p[0]), str(p[1])
+            if a in role_ids and b in role_ids and a != b:
+                key = frozenset((a, b))
+                if key not in seen_p:
+                    seen_p.add(key)
+                    nc_pairs.append([a, b])
+    limits = {}
+    raw_limits = raw.get("limits")
+    if isinstance(raw_limits, dict):
+        for rid, lim in raw_limits.items():
+            if rid in role_ids and isinstance(lim, dict):
+                limits[rid] = {
+                    "maxConsecutive": _clamp(lim.get("maxConsecutive"), 0, 8, 0),
+                    "maxTotal": _clamp(lim.get("maxTotal"), 0, 8, 0),
+                }
+    return {"roles": roles, "ncMode": nc_mode, "ncPairs": nc_pairs,
+            "limits": limits}
+
+
+def normalize_rounds_groups(raw, valid_ids, max_rounds=8):
+    """清洗 轮→组→成员 结构，丢弃非法成员 id。"""
+    rounds = []
+    for rnd in (raw if isinstance(raw, list) else [])[:max_rounds]:
+        groups = []
+        for grp in (rnd if isinstance(rnd, list) else [])[:26]:
+            groups.append([s for s in (grp if isinstance(grp, list) else [])
+                           if s in valid_ids][:99])
+        rounds.append(groups)
+    return rounds
+
+
+def normalize_role_assign(raw, template, valid_ids, rounds_groups):
+    """清洗角色安排：轮→组→{角色id: [成员]}，成员必须仍在该组。"""
+    role_ids = {r["id"] for r in template["roles"]}
+    out = []
+    for ri, groups in enumerate(rounds_groups):
+        rnd = []
+        src_r = raw[ri] if isinstance(raw, list) and ri < len(raw) else []
+        for gi, grp in enumerate(groups):
+            d = {}
+            src_g = src_r[gi] if isinstance(src_r, list) and gi < len(src_r) else {}
+            if isinstance(src_g, dict):
+                for rid, members in src_g.items():
+                    if rid in role_ids and isinstance(members, list):
+                        keep = []
+                        for m in members:
+                            if m in valid_ids and m in grp and m not in keep:
+                                keep.append(m)
+                        if keep:
+                            d[rid] = keep[:5]
+            rnd.append(d)
+        out.append(rnd)
+    return out
+
+
+def normalize_role_locks(raw, template, valid_ids, rounds_groups):
+    """清洗角色锁定 [{round, group, role, member}]。"""
+    role_ids = {r["id"] for r in template["roles"]}
+    out = []
+    seen = set()
+    for l in (raw if isinstance(raw, list) else [])[:400]:
+        if not isinstance(l, dict):
+            continue
+        try:
+            ri = int(l.get("round"))
+            gi = int(l.get("group"))
+        except (TypeError, ValueError):
+            continue
+        rid = str(l.get("role") or "")
+        mid = str(l.get("member") or "")
+        if not (0 <= ri < len(rounds_groups)):
+            continue
+        if not (0 <= gi < len(rounds_groups[ri])):
+            continue
+        if rid not in role_ids or mid not in valid_ids:
+            continue
+        key = (ri, gi, rid, mid)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"round": ri, "group": gi, "role": rid, "member": mid})
+    return out
+
+
+def normalize_roles_payload(raw, students):
+    """清洗存档中的角色轮值数据（模板 + 草稿 + 已确认版本）。"""
+    valid_ids = {s["id"] for s in students}
+    tpl = normalize_role_template(raw.get("template"), valid_ids)
+    out = {"template": tpl, "draft": None, "versions": []}
+    d = raw.get("draft")
+    if isinstance(d, dict):
+        groups = normalize_rounds_groups(d.get("groups"), valid_ids)
+        if any(any(g) for rnd in groups for g in rnd):
+            out["draft"] = {
+                "sourceMode": "rotation" if d.get("sourceMode") == "rotation" else "single",
+                "fingerprint": str(d.get("fingerprint") or "")[:300],
+                "groups": groups,
+                "roundNames": [str(x)[:20] for x in
+                               (d.get("roundNames") or [])][:len(groups)],
+                "assign": normalize_role_assign(d.get("assign"), tpl, valid_ids, groups),
+                "locks": normalize_role_locks(d.get("locks"), tpl, valid_ids, groups),
+            }
+    for v in (raw.get("versions") or [])[:20]:
+        if not isinstance(v, dict):
+            continue
+        vstudents = normalize_students(v.get("students")) or students
+        vvalid = {s["id"] for s in vstudents}
+        vtpl = normalize_role_template(v.get("template"), vvalid)
+        groups = normalize_rounds_groups(v.get("groups"), vvalid)
+        if not any(any(g) for rnd in groups for g in rnd):
+            continue
+        out["versions"].append({
+            "id": _safe_id(str(v.get("id") or ""))[:24] or uuid.uuid4().hex[:8],
+            "name": str(v.get("name") or "版本").strip()[:40] or "版本",
+            "createdAt": _clamp(v.get("createdAt"), 0, 10 ** 12, int(time.time())),
+            "sourceMode": "rotation" if v.get("sourceMode") == "rotation" else "single",
+            "template": vtpl,
+            "groups": groups,
+            "roundNames": [str(x)[:20] for x in
+                           (v.get("roundNames") or [])][:len(groups)],
+            "assign": normalize_role_assign(v.get("assign"), vtpl, vvalid, groups),
+            "students": vstudents,
+        })
+    return out
 
 
 # ---------------------------------------------------------------- 页面
@@ -280,6 +445,30 @@ def api_rotation_resolve():
     return jsonify({"conflicts": conflicts, "payload": payload})
 
 
+# ---------------------------------------------------------------- 角色轮值 API
+
+@app.post("/api/roles/fill")
+def api_roles_fill():
+    """保持锁定不动，补齐角色空缺；返回候选方案及对比指标。"""
+    data = request.get_json(force=True, silent=True) or {}
+    students = normalize_students(data.get("students"))
+    valid = {s["id"] for s in students}
+    template = normalize_role_template(data.get("template"), valid)
+    rounds_groups = normalize_rounds_groups(data.get("groups"), valid)
+    assign = normalize_role_assign(data.get("assign"), template, valid, rounds_groups)
+    locks = normalize_role_locks(data.get("locks"), template, valid, rounds_groups)
+    conflicts, warnings = rolesolver.static_conflicts(
+        students, template, rounds_groups, locks)
+    if conflicts:
+        return jsonify({"conflicts": conflicts, "warnings": warnings,
+                        "candidates": []})
+    n = _clamp(data.get("numCandidates"), 1, 5, 3)
+    candidates = rolesolver.fill_roles(
+        students, template, rounds_groups, assign, locks, n)
+    return jsonify({"conflicts": [], "warnings": warnings,
+                    "candidates": candidates})
+
+
 # ---------------------------------------------------------------- 存档 API
 
 def _save_path(sid):
@@ -339,6 +528,9 @@ def api_saves_create():
         entry["plans"] = data.get("plans") or []
         entry["roundsWorking"] = data.get("roundsWorking")
         entry["roundLocks"] = data.get("roundLocks") or {}
+    if isinstance(data.get("roles"), dict):
+        # 角色轮值（模板/草稿/已确认版本）随存档保存；旧存档无此字段不受影响
+        entry["roles"] = normalize_roles_payload(data["roles"], students)
     with open(_save_path(sid), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=1)
     return jsonify({"id": sid, "name": entry["name"]})
@@ -375,7 +567,35 @@ def api_prints_create():
         "createdAt": int(time.time()),
         "students": students,          # 顺序即匿名编号顺序
     }
-    if data.get("mode") == "rotation":
+    if data.get("mode") == "roles":
+        # 角色轮值打印：每页一轮，每组含成员与角色安排
+        pages = []
+        for pg in (data.get("pages") or [])[:8]:
+            if not isinstance(pg, dict):
+                continue
+            title = str(pg.get("title") or "").strip()[:40] or "角色轮值"
+            groups = []
+            for g in (pg.get("groups") or [])[:26]:
+                if not isinstance(g, dict):
+                    continue
+                members = [s for s in (g.get("members") or []) if s in valid]
+                roles_l = []
+                for rl in (g.get("roles") or [])[:12]:
+                    if not isinstance(rl, dict):
+                        continue
+                    nm = str(rl.get("name") or "").strip()[:12]
+                    if not nm:
+                        continue
+                    ppl = []
+                    for s in (rl.get("people") or []):
+                        if s in valid and s not in ppl:
+                            ppl.append(s)
+                    roles_l.append({"name": nm, "people": ppl})
+                groups.append({"members": members, "roles": roles_l})
+            pages.append({"title": title, "groups": groups})
+        entry["mode"] = "roles"
+        entry["pages"] = pages
+    elif data.get("mode") == "rotation":
         pages = []
         round_names = data.get("roundNames") or []
         for i, grps in enumerate(data.get("rounds") or []):

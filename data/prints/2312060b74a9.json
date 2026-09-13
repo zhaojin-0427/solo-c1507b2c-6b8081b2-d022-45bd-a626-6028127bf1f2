@@ -1,0 +1,122 @@
+{
+ "id": "2312060b74a9",
+ "title": "多轮轮换分组",
+ "createdAt": 1789286547,
+ "students": [
+  {
+   "id": "s1_gjrqr",
+   "name": "甲",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s2_5055y",
+   "name": "乙",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s3_7rgzz",
+   "name": "丙",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s4_tpuaz",
+   "name": "丁",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s5_ib4ly",
+   "name": "戊",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s6_6wrtw",
+   "name": "己",
+   "tags": [
+    "运维"
+   ]
+  },
+  {
+   "id": "s7_sxhzw",
+   "name": "庚",
+   "tags": [
+    "测试"
+   ]
+  },
+  {
+   "id": "s8_s729d",
+   "name": "辛",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s9_ehn3z",
+   "name": "壬",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s10_3nnf6",
+   "name": "癸",
+   "tags": [
+    "后端"
+   ]
+  }
+ ],
+ "mode": "rotation",
+ "pages": [
+  {
+   "title": "第 1 轮分组",
+   "groups": [
+    [
+     "s10_3nnf6",
+     "s1_gjrqr",
+     "s3_7rgzz",
+     "s7_sxhzw",
+     "s2_5055y"
+    ],
+    [
+     "s4_tpuaz",
+     "s8_s729d"
+    ],
+    [
+     "s5_ib4ly",
+     "s6_6wrtw",
+     "s9_ehn3z"
+    ]
+   ]
+  },
+  {
+   "title": "第 2 轮分组",
+   "groups": [
+    [
+     "s2_5055y",
+     "s4_tpuaz",
+     "s8_s729d"
+    ],
+    [
+     "s5_ib4ly",
+     "s6_6wrtw",
+     "s9_ehn3z"
+    ],
+    [
+     "s10_3nnf6",
+     "s1_gjrqr",
+     "s3_7rgzz",
+     "s7_sxhzw"
+    ]
+   ]
+  }
+ ]
+}

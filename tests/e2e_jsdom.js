@@ -419,6 +419,138 @@ async function scenarioE() {
   check("E6 取消后弹窗关闭", $("#resolve-modal").classList.contains("hidden"));
 }
 
+/* ---------------- 场景F：角色轮值 ---------------- */
+async function scenarioF() {
+  console.log("场景F：角色轮值（模板→草稿→拖放校验→补齐→确认→过期→复制）");
+  const window = await newPage();
+  const $ = (s) => window.document.querySelector(s);
+  const $$ = (s) => Array.from(window.document.querySelectorAll(s));
+
+  $("#bulk-text").value = "甲 演讲\n乙 记录\n丙 演讲\n丁 记录\n戊 演讲\n己 记录";
+  $("#btn-bulk-import").click();
+  // 生成单轮分组：2 组 × 3 人
+  $("#set-groups").value = "2";
+  $("#set-min").value = "3";
+  $("#set-max").value = "3";
+  $("#btn-generate").click();
+  await sleep(400);
+  check("F1 分组已生成", !$("#wb-main").classList.contains("hidden"));
+
+  // 到角色页定义模板：主持、记录
+  $('.tab[data-tab="roles"]').click();
+  $("#role-name").value = "主持";
+  $("#btn-add-role").click();
+  $("#role-name").value = "记录";
+  $("#btn-add-role").click();
+  check("F2 模板含 2 个角色", $$("#role-tpl-table tbody tr").length === 2,
+    $("#role-tpl-table tbody").textContent.slice(0, 40));
+
+  // 建立草稿
+  $("#btn-role-draft").click();
+  await sleep(30);
+  check("F3 草稿区显示", !$("#role-draft-main").classList.contains("hidden"));
+  check("F4 角色空缺提示", $("#role-violation-list").textContent.includes("缺"),
+    $("#role-violation-list").textContent.slice(0, 60));
+  check("F5 成员×轮次矩阵已渲染", $$("#role-matrix tbody tr").length === 6,
+    "行数 " + $$("#role-matrix tbody tr").length);
+
+  // 拖一名成员到「主持」槽
+  const slot = $$("#role-groups-grid .role-slot")[0];
+  const poolChip = slot.closest(".group-card").querySelector(".role-pool .member-chip");
+  const sid = poolChip.dataset.sid;
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  drop.dataTransfer = { getData: (k) => (k === "text/plain" ? sid : "") };
+  slot.dispatchEvent(drop);
+  await sleep(30);
+  check("F6 拖放后槽位有 1 人", $$("#role-groups-grid .role-chip").length === 1);
+
+  // 同一人再拖到「记录」槽 → 即时指出同轮兼任（默认全部互不兼任）
+  const card0 = $$("#role-groups-grid .group-card")[0];
+  const slot2 = card0.querySelectorAll(".role-slot")[1];
+  const drop2 = new window.Event("drop", { bubbles: true, cancelable: true });
+  drop2.dataTransfer = { getData: (k) => (k === "text/plain" ? sid : "") };
+  slot2.dispatchEvent(drop2);
+  await sleep(30);
+  check("F7 即时指出同轮兼任", $("#role-violation-list").textContent.includes("同时担任"),
+    $("#role-violation-list").textContent.slice(0, 80));
+
+  // 点选提示 → 定位高亮
+  const ncItem = $$("#role-violation-list li")
+    .find((li) => li.textContent.includes("同时担任"));
+  ncItem.click();
+  await sleep(80);
+  check("F8 点选后定位高亮", !!$("#role-groups-grid .flash"), "无高亮元素");
+
+  // 补齐空缺 → 候选对比弹窗
+  $("#btn-role-fill").click();
+  await sleep(1200);
+  check("F9 候选对比弹窗", !$("#role-cand-modal").classList.contains("hidden"),
+    $("#role-conflict-list").textContent.slice(0, 60));
+  const modalText = $("#role-cand-body").textContent;
+  check("F10 候选按四项指标比较",
+    modalText.includes("空缺") && modalText.includes("资格违规") &&
+    modalText.includes("角色重复") && modalText.includes("负担差异"));
+  $$("#role-cand-body button[data-idx]")[0].click();
+  await sleep(50);
+  check("F11 采用候选后编排检查通过", $("#role-violation-summary").classList.contains("ok"),
+    $("#role-violation-list").textContent.slice(0, 80));
+
+  // 锁定第一项安排，确认版本
+  $("#role-groups-grid .role-chip .m-lock").click();
+  await sleep(30);
+  check("F12 锁定计数", $("#role-lock-summary").textContent.includes("1 项安排已锁定"),
+    $("#role-lock-summary").textContent);
+  $("#btn-role-confirm").click();   // confirm() 已 stub 为 true
+  await sleep(30);
+  check("F13 版本已确认", $$("#role-versions-table tbody tr").length === 1 &&
+    $("#role-versions-table").textContent.includes("版本 1"));
+  $$('#role-versions-table [data-act="view"]')[0].click();
+  await sleep(30);
+  check("F14 版本只读角色卡", !$("#role-version-view").classList.contains("hidden") &&
+    $$("#role-version-grid .role-chip").length > 0);
+
+  // 回排演台拖动一名成员 → 来源变化 → 草稿标过期，版本不受影响
+  $('.tab[data-tab="workbench"]').click();
+  const cards = $$("#groups-grid .group-card");
+  const chip2 = cards[0].querySelector(".member-chip");
+  const sid2 = chip2.dataset.sid;
+  const drop3 = new window.Event("drop", { bubbles: true, cancelable: true });
+  drop3.dataTransfer = { getData: (k) => (k === "text/plain" ? sid2 : "") };
+  cards[1].dispatchEvent(drop3);
+  await sleep(40);
+  $('.tab[data-tab="roles"]').click();
+  await sleep(30);
+  check("F15 草稿标为过期", !$("#role-stale").classList.contains("hidden"));
+  check("F16 已确认版本不受影响", $$("#role-versions-table tbody tr").length === 1 &&
+    !$("#role-version-view").classList.contains("hidden"));
+
+  // 复制版本为新草稿 → 可继续调整
+  $$('#role-versions-table [data-act="copy"]')[0].click();  // confirm stub true
+  await sleep(30);
+  check("F17 复制后草稿恢复", !$("#role-draft-main").classList.contains("hidden") &&
+    $$("#role-groups-grid .role-chip").length > 0);
+
+  // 存档往返：角色数据随存档保存
+  $('.tab[data-tab="saves"]').click();
+  $("#save-name").value = "角色E2E";
+  $("#btn-save").click();
+  await sleep(300);
+  const row = $$("#saves-table tbody tr")[0];
+  check("F18 存档已保存", !!row && row.textContent.includes("角色E2E"));
+  // 本地删除版本后从存档恢复，角色版本与模板应还原
+  $$('#role-versions-table [data-act="del"]')[0].click();  // confirm stub true
+  await sleep(30);
+  check("F19 版本已本地删除",
+    $("#role-versions-table").textContent.includes("暂无已确认版本"),
+    $("#role-versions-table").textContent.slice(0, 40));
+  $$('#saves-table [data-act="load"]')[0].click();
+  await sleep(400);
+  check("F20 恢复后版本还原", $$("#role-versions-table tbody tr").length === 1 &&
+    $("#role-versions-table").textContent.includes("版本 1"),
+    $("#role-versions-table").textContent.slice(0, 60));
+  check("F21 恢复后模板还原", $$("#role-tpl-table tbody tr").length === 2);
+}
+
 (async () => {
   // 确认服务可达
   try {
@@ -433,6 +565,7 @@ async function scenarioE() {
   await scenarioC();
   await scenarioD();
   await scenarioE();
+  await scenarioF();
   const passed = results.filter(([, ok]) => ok).length;
   console.log("\nE2E 回归：" + passed + "/" + results.length + " 通过");
   process.exit(process.exitCode || 0);

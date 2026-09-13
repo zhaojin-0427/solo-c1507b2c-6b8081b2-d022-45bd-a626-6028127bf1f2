@@ -1,0 +1,94 @@
+{
+ "id": "95f232fd075a",
+ "title": "角色轮值 · 版本 1",
+ "createdAt": 1789287132,
+ "students": [
+  {
+   "id": "s0",
+   "name": "学员0",
+   "tags": []
+  },
+  {
+   "id": "s1",
+   "name": "学员1",
+   "tags": []
+  },
+  {
+   "id": "s2",
+   "name": "学员2",
+   "tags": []
+  },
+  {
+   "id": "s3",
+   "name": "学员3",
+   "tags": []
+  }
+ ],
+ "mode": "roles",
+ "pages": [
+  {
+   "title": "第 1 轮 · 角色安排",
+   "groups": [
+    {
+     "members": [
+      "s0",
+      "s1"
+     ],
+     "roles": [
+      {
+       "name": "主持",
+       "people": [
+        "s0"
+       ]
+      }
+     ]
+    },
+    {
+     "members": [
+      "s2",
+      "s3"
+     ],
+     "roles": [
+      {
+       "name": "主持",
+       "people": []
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "第 2 轮 · 角色安排",
+   "groups": [
+    {
+     "members": [
+      "s0",
+      "s2"
+     ],
+     "roles": [
+      {
+       "name": "主持",
+       "people": [
+        "s2"
+       ]
+      }
+     ]
+    },
+    {
+     "members": [
+      "s1",
+      "s3"
+     ],
+     "roles": [
+      {
+       "name": "主持",
+       "people": [
+        "s3"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

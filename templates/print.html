@@ -28,6 +28,15 @@
   .members { display: flex; flex-wrap: wrap; gap: 8px; }
   .member { font-size: 20px; padding: 6px 14px; border: 1.5px solid #333;
             border-radius: 999px; background: #f6f6f6; }
+  .role-lines { list-style: none; margin-top: 12px; border-top: 1.5px dashed #999;
+                padding-top: 8px; }
+  .role-lines li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0;
+                   font-size: 16px; }
+  .role-lines .role-title { font-weight: 700; min-width: 3.2em; }
+  .role-lines .role-people { display: flex; flex-wrap: wrap; gap: 6px; }
+  .role-lines .role-member { font-size: 16px; padding: 2px 12px; }
+  .role-lines .vacant { color: #b91c1c; border: 1px dashed #b91c1c;
+                        border-radius: 999px; padding: 2px 10px; font-size: 14px; }
   .toolbar {
     position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px;
     background: rgba(255,255,255,.92); padding: 8px; border-radius: 10px;
@@ -57,7 +66,7 @@
   <section class="page" data-page="{{ loop.index0 }}">
     <div class="head">
       <h1>
-        {%- if entry.get('mode') == 'rotation' -%}
+        {%- if entry.get('mode') in ('rotation', 'roles') -%}
           {{ page.title }}
         {%- else -%}
           {{ entry.title }}
@@ -66,11 +75,41 @@
       <div class="meta">
         共 {{ page.groups|length }} 组 · {{ entry.students|length }} 人
         · {{ "匿名编号" if anon else "实名" }}模式
-        {% if entry.get('mode') == 'rotation' %} · 第 {{ loop.index }} / {{ pages|length }} 轮{% endif %}
+        {% if entry.get('mode') in ('rotation', 'roles') %} · 第 {{ loop.index }} / {{ pages|length }} 轮{% endif %}
       </div>
     </div>
     <div class="grid">
       {% for grp in page.groups %}
+      {% if grp is mapping %}
+      <div class="group">
+        <h2>第 {{ loop.index }} 组 <span class="cnt">{{ grp.members|length }} 人</span></h2>
+        <div class="members">
+          {% for sid in grp.members %}
+          <span class="member">
+            {%- if anon -%}{{ labels.get(sid, "—") }}{%- else -%}{{ names.get(sid, "—") }}{%- endif -%}
+          </span>
+          {% endfor %}
+        </div>
+        {% if grp.roles %}
+        <ul class="role-lines">
+          {% for r in grp.roles %}
+          <li>
+            <span class="role-title">{{ r.name }}</span>
+            <span class="role-people">
+              {% for sid in r.people %}
+              <span class="member role-member">
+                {%- if anon -%}{{ labels.get(sid, "—") }}{%- else -%}{{ names.get(sid, "—") }}{%- endif -%}
+              </span>
+              {% else %}
+              <span class="vacant">空缺</span>
+              {% endfor %}
+            </span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+      {% else %}
       <div class="group">
         <h2>第 {{ loop.index }} 组 <span class="cnt">{{ grp|length }} 人</span></h2>
         <div class="members">
@@ -81,6 +120,7 @@
           {% endfor %}
         </div>
       </div>
+      {% endif %}
       {% endfor %}
     </div>
   </section>

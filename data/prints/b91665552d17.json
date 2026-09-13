@@ -1,0 +1,122 @@
+{
+ "id": "b91665552d17",
+ "title": "多轮轮换分组",
+ "createdAt": 1789286423,
+ "students": [
+  {
+   "id": "s1_o7uwq",
+   "name": "甲",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s2_c5c72",
+   "name": "乙",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s3_i85be",
+   "name": "丙",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s4_mamdo",
+   "name": "丁",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s5_74zua",
+   "name": "戊",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s6_90xcj",
+   "name": "己",
+   "tags": [
+    "运维"
+   ]
+  },
+  {
+   "id": "s7_kczm7",
+   "name": "庚",
+   "tags": [
+    "测试"
+   ]
+  },
+  {
+   "id": "s8_51qpu",
+   "name": "辛",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s9_lhbit",
+   "name": "壬",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s10_taw7g",
+   "name": "癸",
+   "tags": [
+    "后端"
+   ]
+  }
+ ],
+ "mode": "rotation",
+ "pages": [
+  {
+   "title": "第 1 轮分组",
+   "groups": [
+    [
+     "s10_taw7g",
+     "s1_o7uwq",
+     "s3_i85be",
+     "s7_kczm7",
+     "s2_c5c72"
+    ],
+    [
+     "s4_mamdo",
+     "s8_51qpu"
+    ],
+    [
+     "s5_74zua",
+     "s6_90xcj",
+     "s9_lhbit"
+    ]
+   ]
+  },
+  {
+   "title": "第 2 轮分组",
+   "groups": [
+    [
+     "s2_c5c72",
+     "s4_mamdo",
+     "s8_51qpu"
+    ],
+    [
+     "s5_74zua",
+     "s6_90xcj",
+     "s9_lhbit"
+    ],
+    [
+     "s10_taw7g",
+     "s1_o7uwq",
+     "s3_i85be",
+     "s7_kczm7"
+    ]
+   ]
+  }
+ ]
+}

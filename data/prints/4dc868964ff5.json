@@ -1,0 +1,122 @@
+{
+ "id": "4dc868964ff5",
+ "title": "多轮轮换分组",
+ "createdAt": 1789286683,
+ "students": [
+  {
+   "id": "s1_7css4",
+   "name": "甲",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s2_mxet0",
+   "name": "乙",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s3_vyufi",
+   "name": "丙",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s4_v6kdt",
+   "name": "丁",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s5_45jrt",
+   "name": "戊",
+   "tags": [
+    "后端"
+   ]
+  },
+  {
+   "id": "s6_yl74d",
+   "name": "己",
+   "tags": [
+    "运维"
+   ]
+  },
+  {
+   "id": "s7_dn865",
+   "name": "庚",
+   "tags": [
+    "测试"
+   ]
+  },
+  {
+   "id": "s8_rsdsr",
+   "name": "辛",
+   "tags": [
+    "设计"
+   ]
+  },
+  {
+   "id": "s9_l84d6",
+   "name": "壬",
+   "tags": [
+    "前端"
+   ]
+  },
+  {
+   "id": "s10_35lvi",
+   "name": "癸",
+   "tags": [
+    "后端"
+   ]
+  }
+ ],
+ "mode": "rotation",
+ "pages": [
+  {
+   "title": "第 1 轮分组",
+   "groups": [
+    [
+     "s10_35lvi",
+     "s1_7css4",
+     "s3_vyufi",
+     "s7_dn865",
+     "s2_mxet0"
+    ],
+    [
+     "s4_v6kdt",
+     "s8_rsdsr"
+    ],
+    [
+     "s5_45jrt",
+     "s6_yl74d",
+     "s9_l84d6"
+    ]
+   ]
+  },
+  {
+   "title": "第 2 轮分组",
+   "groups": [
+    [
+     "s2_mxet0",
+     "s4_v6kdt",
+     "s8_rsdsr"
+    ],
+    [
+     "s5_45jrt",
+     "s6_yl74d",
+     "s9_l84d6"
+    ],
+    [
+     "s10_35lvi",
+     "s1_7css4",
+     "s3_vyufi",
+     "s7_dn865"
+    ]
+   ]
+  }
+ ]
+}
